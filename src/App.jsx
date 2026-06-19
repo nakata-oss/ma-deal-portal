@@ -1,1717 +1,2108 @@
-﻿import { useState, useEffect, useRef } from 'react'
-import { supabase } from './supabase.js'
-import Pipeline from './Pipeline.jsx'
-import ScoringEngine from './ScoringEngine.jsx'
-import ContractCreation from './ContractCreation.jsx'
-import DueDiligence from './DueDiligence.jsx'
-import Valuation from './Valuation.jsx'
-import CorporateNumberSearch from './CorporateNumberSearch.jsx'
+import { useState, useEffect, useRef } from "react";
+import * as XLSX from "xlsx";
 
-// レスポンシブCSS注入
-if (!document.getElementById('sd-responsive')) {
-  const s = document.createElement('style');
-  s.id = 'sd-responsive';
-  s.textContent = `
-    *, *::before, *::after { box-sizing: border-box; }
-    body { margin: 0; -webkit-text-size-adjust: 100%; }
-    @media (max-width: 767px) {
-      input, select, textarea { font-size: 16px !important; }
-      table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-      .sd-grid-2 { grid-template-columns: 1fr !important; }
-    }
-  `;
-  document.head.appendChild(s);
-}
+// ============================================================
+// MOCK DATA & CONSTANTS
+// ============================================================
+const DEMO_USERS = [
+  { id: "u1", email: "demo@mediaca.co.jp", password: "demo1234", role: "intermediary", company: "メディカ仲介株式会社", contact: "山田太郎" },
+  { id: "u2", email: "next@synapsedeal.co.jp", password: "admin1234", role: "admin", company: "SynapseDeal株式会社", contact: "中田龍三" },
+];
 
-const API = import.meta.env.VITE_API_URL || 'https://synapsedeal-production.up.railway.app'
-
-// ==================== 一貫ダミーデータ（全ページ共通）====================
-const DEMO_DEAL = {
-  id: 'demo-001',
-  deal_name: '株式会社さくら製作所 M&A案件',
-  company_name: '株式会社さくら製作所',
-  industry: '製造業',
-  scheme: '株式譲渡',
-  phase: 'dd',
-  advisor_mode: 'senior',
-  seller_name: '田中 義雄',
-  seller_address: '愛知県名古屋市中区錦2-14-19',
-  buyer_corp_name: 'SynapseDeal株式会社',
-  business: '自動車部品の精密加工・組立。主要取引先はトヨタ系Tier1サプライヤー3社。従業員85名、平均勤続12年。',
-  ma_strategy: '後継者不在による事業承継。オーナー社長（68歳）の引退意向。買収後も現経営陣を5年間継続。',
-  sales: 850000000, operating_profit: 68000000, ebitda: 95000000,
-  net_assets: 320000000, interest_bearing_debt: 120000000, cash: 45000000,
-  purchase_price: 480000000, transaction_amount: '4億8,000万円',
-  created_at: '2026-01-15T09:00:00Z',
-}
-const DEMO_MEETINGS = [
-  { id:'m001', date:'2026-03-10', company:'株式会社さくら製作所', contact:'田中 義雄（代表取締役）', phase:'初回面談', result:'関心あり・検討中', bant:{budget:'5億円程度を想定',authority:'オーナー社長が最終決定',need:'後継者不在・体力的に引退希望',timeline:'2年以内にクロージング希望'}, issues:['後継者問題が喫緊の課題','従業員の雇用継続への強い要望','株価評価への不安'], next_action:'財務資料の提供依頼・NDA締結' },
-  { id:'m002', date:'2026-03-24', company:'株式会社さくら製作所', contact:'田中 義雄（代表）・山本 部長（経理）', phase:'NDA締結・財務開示', result:'NDA締結完了・3期決算書受領', bant:{budget:'未確定',authority:'田中社長',need:'企業価値算定の早期実施',timeline:'4月中にIM完成希望'}, issues:['直近期の売上減少（前期比7%減）への説明要求','主要取引先の依存度（1社60%）リスク'], next_action:'IM作成・財務DD計画策定' },
-  { id:'m003', date:'2026-04-07', company:'株式会社さくら製作所', contact:'田中 義雄・顧問弁護士 佐々木氏', phase:'IM提示・条件交渉', result:'買収条件の概算提示・継続交渉', bant:{budget:'4〜5億円希望',authority:'田中社長＋弁護士確認',need:'株価・役員退職金の税務設計',timeline:'6月MOU締結目標'}, issues:['役員退職金の水準交渉（1億円要求）','従業員持株会の扱い','DD期間の短縮要求'], next_action:'DD実施・MOU草案作成' },
-]
-
-// ==================== 数値フォーマット（3桁カンマ）====================
-const fmtNum = (v) => {
-  if (v === null || v === undefined || v === '') return '';
-  const n = Number(String(v).replace(/,/g, ''));
-  if (isNaN(n)) return String(v);
-  return n.toLocaleString('ja-JP');
-};
-const fmtYen = (v) => {
-  if (!v && v !== 0) return '';
-  const n = Number(String(v).replace(/,/g, ''));
-  if (isNaN(n)) return String(v);
-  if (n >= 100000000) return `${(n/100000000).toFixed(2).replace(/\.?0+$/, '')}億円`;
-  if (n >= 10000) return `${(n/10000).toFixed(0)}万円`;
-  return `${n.toLocaleString('ja-JP')}円`;
+const SPECIALTIES = ["内科", "外科", "整形外科", "小児科", "産婦人科", "眼科", "皮膚科", "精神科", "泌尿器科", "耳鼻咽喉科", "放射線科", "麻酔科", "救急科", "リハビリテーション科", "歯科", "その他"];
+const PREFS = ["北海道","青森","岩手","宮城","秋田","山形","福島","茨城","栃木","群馬","埼玉","千葉","東京","神奈川","新潟","富山","石川","福井","山梨","長野","岐阜","静岡","愛知","三重","滋賀","京都","大阪","兵庫","奈良","和歌山","鳥取","島根","岡山","広島","山口","徳島","香川","愛媛","高知","福岡","佐賀","長崎","熊本","大分","宮崎","鹿児島","沖縄"];
+const STAGES = ["情報収集中", "NDA締結", "TOP面談", "LOI提出", "MOU締結", "DA締結", "クロージング", "検討終了"];
+const STAGE_COLORS = {
+  "情報収集中": "#94a3b8", "NDA締結": "#60a5fa", "TOP面談": "#a78bfa",
+  "LOI提出": "#f59e0b", "MOU締結": "#f97316", "DA締結": "#10b981",
+  "クロージング": "#0056D6", "検討終了": "#ef4444"
 };
 
-const TABS = [
-  { key: 'dashboard',   label: 'ダッシュボード',         enabled: true },
-  { key: 'pipeline',    label: '営業パイプライン',         enabled: true },
-  { key: 'advisory',    label: 'アドバイザリー契約',       enabled: true },
-  { key: 'gekiraku_im', label: 'ゲキラクIM',              enabled: true },
-  { key: 'deals',       label: '案件管理パイプライン',     enabled: true },
-  { key: 'scoring',     label: '候補先選定',              enabled: true },
-  { key: 'contract',    label: '契約書作成',              enabled: true },
-  { key: 'dd',          label: 'DD支援',                  enabled: true },
-  { key: 'valuation',   label: 'バリュエーション',         enabled: true },
-  { key: 'company',     label: '設定',                    enabled: true },
-]
+const INIT_DEALS = [
+  {
+    id: "d1", userId: "u1", companyName: "医療法人社団 桜花会", specialty: "内科", prefecture: "東京",
+    revenue: 320000, operatingProfit: 28000, ebitda: 52000, ebitdaReal: 61000,
+    ownerSalary: 24000, cash: 18500, debt: 42000,
+    hopedPrice: 200000, beds: 0, clinics: 1, doctorAge: 63, fullTimeDoctors: 3, partTimeDoctors: 2,
+    insuranceRatio: 90, selfPayRatio: 10,
+    patients3y: [{ year: 2021, total: 12000, new: 2400, cont: 9600 }, { year: 2022, total: 12800, new: 2300, cont: 10500 }, { year: 2023, total: 13200, new: 2500, cont: 10700 }],
+    successorInfo: "後任医師候補あり（内科専門医）", competitorInfo: "徒歩圏内に2院あり",
+    stage: "TOP面談", status: "active", submittedAt: "2025-03-15", introducedBy: "u1",
+    files: [{ name: "IM_桜花会.pdf", type: "IM" }, { name: "決算書3期.pdf", type: "FS" }],
+    nextAction: "TOP面談日程調整中", memo: "理事長は引退希望。後任医師の確保が鍵。",
+    fdFee: null, successFee: null,
+  },
+  {
+    id: "d2", userId: "u1", companyName: "医療法人 緑風会クリニック", specialty: "産婦人科", prefecture: "神奈川",
+    revenue: 480000, operatingProfit: 56000, ebitda: 78000, ebitdaReal: 92000,
+    ownerSalary: 36000, cash: 31000, debt: 15000,
+    hopedPrice: 350000, beds: 0, clinics: 1, doctorAge: 58, fullTimeDoctors: 2, partTimeDoctors: 4,
+    insuranceRatio: 60, selfPayRatio: 40,
+    patients3y: [{ year: 2021, total: 8500, new: 1200, cont: 7300 }, { year: 2022, total: 9200, new: 1350, cont: 7850 }, { year: 2023, total: 9800, new: 1500, cont: 8300 }],
+    successorInfo: "未定", competitorInfo: "NIPT実施施設として近隣に競合なし",
+    stage: "NDA締結", status: "active", submittedAt: "2025-03-22", introducedBy: "u1",
+    files: [{ name: "IM_緑風会.pdf", type: "IM" }],
+    nextAction: "3期財務書類の提出待ち", memo: "NIPTの自由診療比率が高く収益性優秀。",
+    fdFee: null, successFee: null,
+  },
+  {
+    id: "d3", userId: "u1", companyName: "医療法人 山手整形外科", specialty: "整形外科", prefecture: "埼玉",
+    revenue: 520000, operatingProfit: 62000, ebitda: null, ebitdaReal: 89000,
+    ownerSalary: 30000, cash: 25000, debt: 18000,
+    hopedPrice: 280000, beds: 19, clinics: 1, doctorAge: 61, fullTimeDoctors: 4, partTimeDoctors: 3,
+    insuranceRatio: 95, selfPayRatio: 5, patients3y: [], files: [],
+    successorInfo: "候補なし", competitorInfo: "近隣に同科目なし",
+    stage: "LOI提出", status: "active", submittedAt: "2025-04-08", introducedBy: "u1",
+    nextAction: "LOI条件すり合わせ中", memo: "リハビリ設備充実。売上安定。",
+    fdFee: null, successFee: null,
+  },
+  {
+    id: "d4", userId: "u1", companyName: "医療法人社団 あおば会", specialty: "眼科", prefecture: "千葉",
+    revenue: 190000, operatingProfit: 31000, ebitda: null, ebitdaReal: 42000,
+    ownerSalary: 18000, cash: 12000, debt: 8000,
+    hopedPrice: 120000, beds: 0, clinics: 1, doctorAge: 64, fullTimeDoctors: 1, partTimeDoctors: 2,
+    insuranceRatio: 80, selfPayRatio: 20, patients3y: [], files: [],
+    successorInfo: "", competitorInfo: "",
+    stage: "情報収集中", status: "active", submittedAt: "2025-04-18", introducedBy: "u1",
+    nextAction: "初回ヒアリング設定", memo: "白内障手術実績豊富。",
+    fdFee: null, successFee: null,
+  },
+  {
+    id: "d5", userId: "u1", companyName: "医療法人 なでしこ産婦人科", specialty: "産婦人科", prefecture: "愛知",
+    revenue: 560000, operatingProfit: 72000, ebitda: null, ebitdaReal: 108000,
+    ownerSalary: 42000, cash: 38000, debt: 22000,
+    hopedPrice: 340000, beds: 19, clinics: 1, doctorAge: 66, fullTimeDoctors: 3, partTimeDoctors: 5,
+    insuranceRatio: 65, selfPayRatio: 35, patients3y: [], files: [],
+    successorInfo: "候補1名あり", competitorInfo: "競合少",
+    stage: "MOU締結", status: "active", submittedAt: "2025-04-25", introducedBy: "u1",
+    nextAction: "DD日程調整", memo: "分娩件数400件超。収益性高い。",
+    fdFee: null, successFee: null,
+  },
+  {
+    id: "d6", userId: "u1", companyName: "医療法人社団 大空会", specialty: "内科", prefecture: "大阪",
+    revenue: 240000, operatingProfit: 18000, ebitda: null, ebitdaReal: 36000,
+    ownerSalary: 20000, cash: 9000, debt: 15000,
+    hopedPrice: 100000, beds: 0, clinics: 1, doctorAge: 70, fullTimeDoctors: 1, partTimeDoctors: 1,
+    insuranceRatio: 100, selfPayRatio: 0, patients3y: [], files: [],
+    successorInfo: "", competitorInfo: "",
+    stage: "NDA締結", status: "active", submittedAt: "2025-05-07", introducedBy: "u1",
+    nextAction: "財務資料依頼中", memo: "理事長高齢。早期クローズ希望。",
+    fdFee: null, successFee: null,
+  },
+  {
+    id: "d7", userId: "u1", companyName: "医療法人 ひかり皮膚科", specialty: "皮膚科", prefecture: "福岡",
+    revenue: 180000, operatingProfit: 28000, ebitda: null, ebitdaReal: 38000,
+    ownerSalary: 16000, cash: 14000, debt: 5000,
+    hopedPrice: 130000, beds: 0, clinics: 1, doctorAge: 55, fullTimeDoctors: 2, partTimeDoctors: 2,
+    insuranceRatio: 70, selfPayRatio: 30, patients3y: [], files: [],
+    successorInfo: "未定", competitorInfo: "美容皮膚科との差別化済",
+    stage: "TOP面談", status: "active", submittedAt: "2025-05-14", introducedBy: "u1",
+    nextAction: "TOP面談実施済 → LOI検討中", memo: "自由診療比率高く収益性良好。",
+    fdFee: null, successFee: null,
+  },
+  {
+    id: "d8", userId: "u1", companyName: "医療法人社団 桐生会", specialty: "整形外科", prefecture: "東京",
+    revenue: 680000, operatingProfit: 95000, ebitda: null, ebitdaReal: 135000,
+    ownerSalary: 50000, cash: 62000, debt: 30000,
+    hopedPrice: 500000, beds: 0, clinics: 2, doctorAge: 60, fullTimeDoctors: 5, partTimeDoctors: 4,
+    insuranceRatio: 90, selfPayRatio: 10, patients3y: [], files: [],
+    successorInfo: "候補あり", competitorInfo: "都内有数の整形外科",
+    stage: "クロージング", status: "active", submittedAt: "2025-05-20", introducedBy: "u1",
+    nextAction: "DA最終確認", memo: "大型案件。2拠点展開。",
+    fdFee: 5000, successFee: 25000,
+  },
+  // --- メール仮登録デモデータ ---
+  {
+    id: "p1", userId: "u2", companyName: "医療法人 青空会クリニック", specialty: "内科", prefecture: "東京",
+    revenue: 280000, operatingProfit: 22000, ebitda: null, ebitdaReal: 48000,
+    ownerSalary: 24000, cash: null, debt: null,
+    hopedPrice: 150000, beds: 0, clinics: 1, doctorAge: 67, fullTimeDoctors: 2, partTimeDoctors: 1,
+    insuranceRatio: null, selfPayRatio: null, patients3y: [], files: [],
+    successorInfo: "", competitorInfo: "",
+    stage: "情報収集中", status: "pending", source: "email",
+    submittedAt: "2025-04-28", introducedBy: null,
+    introducedByEmail: "yamada@mediaca.co.jp", introducedByName: "山田太郎", introducedByCompany: "メディカ仲介株式会社",
+    emailSubject: "案件ご紹介：内科クリニック（東京都新宿区）",
+    nextAction: "初回ヒアリング", memo: "理事長67歳、後継者なし。希望価格1.5億円程度。売上約2.8億円、役員報酬2,400万円/年。",
+    fdFee: null, successFee: null,
+  },
+  {
+    id: "p2", userId: "u2", companyName: "医療法人社団 誠和会", specialty: "整形外科", prefecture: "埼玉",
+    revenue: 520000, operatingProfit: 61000, ebitda: null, ebitdaReal: 89000,
+    ownerSalary: 30000, cash: null, debt: null,
+    hopedPrice: 280000, beds: 19, clinics: 1, doctorAge: 61, fullTimeDoctors: 4, partTimeDoctors: 3,
+    insuranceRatio: null, selfPayRatio: null, patients3y: [], files: [],
+    successorInfo: "", competitorInfo: "",
+    stage: "情報収集中", status: "pending", source: "email",
+    submittedAt: "2025-04-29", introducedBy: null,
+    introducedByEmail: "info@maadvisory.co.jp", introducedByName: "鈴木一郎", introducedByCompany: "MAアドバイザリー株式会社",
+    emailSubject: "【案件情報】整形外科有床クリニック（埼玉県）承継案件",
+    nextAction: "初回ヒアリング", memo: "有床19床。リハビリ充実。売上5.2億円、EBITDA実態約8,900万円。マルチプル約3.1x。",
+    fdFee: null, successFee: null,
+  },
+  {
+    id: "p3", userId: "u2", companyName: "（ノンネーム）眼科クリニック", specialty: "眼科", prefecture: "大阪",
+    revenue: 190000, operatingProfit: 31000, ebitda: null, ebitdaReal: 42000,
+    ownerSalary: 18000, cash: null, debt: null,
+    hopedPrice: 120000, beds: 0, clinics: 1, doctorAge: 64, fullTimeDoctors: 1, partTimeDoctors: 2,
+    insuranceRatio: null, selfPayRatio: null, patients3y: [], files: [],
+    successorInfo: "", competitorInfo: "",
+    stage: "情報収集中", status: "pending", source: "newsletter",
+    submittedAt: "2025-04-30", introducedBy: null,
+    introducedByEmail: "newsletter@ma-medical.jp", introducedByName: null, introducedByCompany: "メディカルM&A総研",
+    emailSubject: "【案件メルマガ Vol.47】今週の医療法人承継案件一覧",
+    nextAction: "初回ヒアリング", memo: "メルマガから自動抽出。白内障・眼底検査中心。マルチプル2.9x。要件フィルタ通過済み。",
+    fdFee: null, successFee: null,
+  },
+];
 
-const PHASES = [
-  { key: 'sourcing', label: 'ソーシング' },
-  { key: 'im', label: 'IM作成' },
-  { key: 'dd_plan', label: 'DD準備' },
-  { key: 'dd_exec', label: 'DD実行' },
-  { key: 'spa_draft', label: 'SPA起草' },
-  { key: 'closing', label: 'クロージング' },
-]
+// ============================================================
+// 自社要件フィルタ設定（メルマガ自動抽出用）
+// ============================================================
+const DEFAULT_FILTER_CRITERIA = {
+  specialties: ["内科", "外科", "整形外科", "産婦人科", "眼科", "皮膚科", "小児科"],
+  prefectures: ["東京", "神奈川", "埼玉", "千葉", "大阪", "愛知", "福岡"],
+  maxMultiple: 5.0,
+  minRevenue: 100000,   // 千円
+  minEbitda: 20000,     // 千円
+  maxDoctorAge: 75,
+};
 
-const DOCUMENTS = [
-  { key: 'financial', label: '財務諸表（BS・PL・SS）', period: '3〜5期分', required: true },
-  { key: 'ledger_detail', label: '勘定科目内訳', period: '3〜5期分', required: true },
-  { key: 'tax', label: '法人税申告書', period: '3〜5期分', required: true },
-  { key: 'registry', label: '登記簿謄本', period: '最新版', required: false },
-  { key: 'articles', label: '定款', period: '最新版', required: false },
-  { key: 'general_ledger', label: '総勘定元帳', period: '3〜5期分', required: false },
-  { key: 'customers', label: '売上先一覧（上位10〜30先）', period: '', required: false },
-  { key: 'suppliers', label: '仕入先の取引先一覧（上位10〜30先）', period: '', required: false },
-  { key: 'kpi', label: '顧客データ・KPI資料', period: '', required: false },
-  { key: 'loans', label: '借入金融機関一覧・返済スケジュール', period: '', required: false },
-  { key: 'contracts', label: '重要な契約書一覧', period: '', required: false },
-  { key: 'meeting', label: 'TOP面談・ヒアリング議事録', period: 'あれば', required: false },
-  { key: 'other', label: 'その他資料', period: '', required: false },
-]
 
-const FONT = "'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic', sans-serif"
+// ============================================================
+// UTILS
+// ============================================================
+const fmt = (n) => n == null ? "—" : Math.round(n).toLocaleString("ja-JP");
+const fmtM = (n) => n == null ? "—" : `${(n / 1000).toFixed(1)}M`;
+const pct = (n) => n == null ? "—" : `${n}%`;
+const multiple = (price, ebitda) => (ebitda && ebitda > 0) ? `${(price / ebitda).toFixed(1)}x` : "—";
 
+// ============================================================
+// STYLE CONSTANTS
+// ============================================================
 const C = {
-  bg: '#FEFCE8',
-  bgCard: '#FFFFFF',
-  bgHeader: '#1E3A5F',
-  bgSub: '#F7F5E6',
-  navy: '#1E3A5F',
-  navyLight: '#2D4160',
-  cream: '#FEFCE8',
-  gold: '#C8A951',
-  text: '#1A1A2A',
-  textMuted: '#4A4A5A',
-  textLight: '#7A7A8A',
-  border: '#E4E0CE',
-  borderDark: '#C8C4B0',
-  danger: '#8B2020',
-  dangerBg: '#FDF2F2',
-  success: '#1A4A2A',
-  successBg: '#F2FAF4',
-  warning: '#6B4A10',
-  warningBg: '#FDF8F0',
-}
+  blue: "#0056D6", blueLt: "#EBF2FF", blueHv: "#0044B0",
+  gold: "#B8952A", goldLt: "#FDF6E3",
+  bg: "#F8F9FC", white: "#FFFFFF",
+  text: "#1a2035", textMd: "#4a5568", textSm: "#718096",
+  border: "#E2E8F0", borderFocus: "#0056D6",
+  danger: "#ef4444", success: "#10b981", warn: "#f59e0b",
+  sidebar: "#0F1E3C",
+};
 
-const inp = {
-  width: '100%',
-  border: '1px solid ' + C.border,
-  borderRadius: 4,
-  padding: '9px 12px',
-  fontSize: 13,
-  outline: 'none',
-  boxSizing: 'border-box',
-  background: '#FDFCF5',
-  fontFamily: FONT,
-  color: C.text,
-  letterSpacing: '0.01em',
-}
+const sty = {
+  app: { fontFamily: "'Noto Sans JP', 'Hiragino Kaku Gothic Pro', sans-serif", background: C.bg, minHeight: "100vh", color: C.text },
+  card: { background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, padding: "24px", marginBottom: 16 },
+  btn: (v = "primary", sm) => ({
+    background: v === "primary" ? C.blue : v === "gold" ? C.gold : v === "danger" ? C.danger : "transparent",
+    color: v === "ghost" ? C.blue : "#fff",
+    border: v === "ghost" ? `1.5px solid ${C.blue}` : "none",
+    borderRadius: 8, padding: sm ? "6px 14px" : "10px 20px",
+    fontSize: sm ? 13 : 14, fontWeight: 600, cursor: "pointer",
+    display: "inline-flex", alignItems: "center", gap: 6,
+  }),
+  input: { width: "100%", padding: "9px 12px", borderRadius: 8, border: `1.5px solid ${C.border}`, fontSize: 14, boxSizing: "border-box", outline: "none", background: C.white },
+  label: { fontSize: 12, fontWeight: 600, color: C.textMd, marginBottom: 4, display: "block" },
+  badge: (color) => ({ background: color + "22", color: color, borderRadius: 20, padding: "3px 10px", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }),
+};
 
-const btn = {
-  primary: {
-    background: C.navy,
-    color: '#FEFCE8',
-    border: 'none',
-    borderRadius: 3,
-    padding: '10px 24px',
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: 'pointer',
-    letterSpacing: '0',
-    fontFamily: FONT,
-  },
-  secondary: {
-    background: 'transparent',
-    color: C.navy,
-    border: '1px solid ' + C.navy,
-    borderRadius: 3,
-    padding: '9px 22px',
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: 'pointer',
-    letterSpacing: '0',
-    fontFamily: FONT,
-  },
-  ghost: {
-    background: 'transparent',
-    color: C.textMuted,
-    border: '1px solid ' + C.border,
-    borderRadius: 3,
-    padding: '9px 20px',
-    fontSize: 13,
-    cursor: 'pointer',
-    fontFamily: FONT,
-  },
-}
+// ============================================================
+// COMPONENTS
+// ============================================================
 
-const USERS_KEY = 'synapsedeal_users'
-const IM_FORMAT_KEY = 'synapsedeal_im_format'
-const TICKETS_KEY = 'synapsedeal_tickets'
-
-function loadJSON(key, fallback) {
-  try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : fallback }
-  catch { return fallback }
-}
-
-// ==================== 共通コンポーネント ====================
-function Divider({ label }) {
+function KPICard({ label, value, sub, color = C.blue, icon }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 16, margin: '24px 0' }}>
-      <div style={{ flex: 1, height: 1, background: C.border }} />
-      {label && <span style={{ fontSize: 11, color: C.textLight, letterSpacing: '0.01em', textTransform: 'none' }}>{label}</span>}
-      <div style={{ flex: 1, height: 1, background: C.border }} />
+    <div style={{ ...sty.card, padding: "20px", marginBottom: 0, borderTop: `3px solid ${color}` }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.textSm, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, color: C.text, lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: C.textSm, marginTop: 6 }}>{sub}</div>}
     </div>
-  )
+  );
 }
 
-function Card({ children, style = {} }) {
-  return (
-    <div style={{
-      background: C.bgCard,
-      border: '1px solid ' + C.border,
-      borderRadius: 4,
-      padding: '24px 28px',
-      marginBottom: 16,
-      ...style,
-    }}>
-      {children}
-    </div>
-  )
+function Tag({ label, color }) {
+  return <span style={sty.badge(color || C.blue)}>{label}</span>;
 }
 
-function CardHeader({ title, subtitle, action }) {
-  return (
-    <div style={{ marginBottom: 20, paddingBottom: 14, borderBottom: '1px solid ' + C.border, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-      <div>
-        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, letterSpacing: '0.02em' }}>{title}</div>
-        {subtitle && <div style={{ fontSize: 12, color: C.textLight, marginTop: 3 }}>{subtitle}</div>}
-      </div>
-      {action}
-    </div>
-  )
+function Pill({ label }) {
+  return <span style={{ background: C.blueLt, color: C.blue, borderRadius: 20, padding: "2px 10px", fontSize: 12, fontWeight: 600 }}>{label}</span>;
 }
 
-function Badge({ children, variant = 'default' }) {
-  const styles = {
-    default: { background: C.bgSub, color: C.textMuted, border: '1px solid ' + C.border },
-    navy: { background: C.navy, color: C.cream },
-    danger: { background: C.dangerBg, color: C.danger, border: '1px solid #E8C0C0' },
-    success: { background: C.successBg, color: C.success, border: '1px solid #B0D8BC' },
-    warning: { background: C.warningBg, color: C.warning, border: '1px solid #E0CCAA' },
-  }
-  return (
-    <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', padding: '2px 8px', borderRadius: 2, ...styles[variant] }}>
-      {children}
-    </span>
-  )
-}
+// ============================================================
+// AUTH SCREEN
+// ============================================================
+function AuthScreen({ onLogin }) {
+  const [tab, setTab] = useState("login"); // login | signup
+  const [form, setForm] = useState({ email: "", password: "", company: "", contact: "" });
+  const [err, setErr] = useState("");
+  const [users, setUsers] = useState(DEMO_USERS);
 
-function StepIndicator({ current, labels }) {
+  const handleLogin = () => {
+    const u = users.find(u => u.email === form.email && u.password === form.password);
+    if (!u) { setErr("メールアドレスまたはパスワードが正しくありません"); return; }
+    onLogin(u);
+  };
+
+  const handleSignup = () => {
+    if (!form.email || !form.password || !form.company || !form.contact) { setErr("すべての項目を入力してください"); return; }
+    const nu = { id: `u${Date.now()}`, ...form, role: "intermediary" };
+    setUsers([...users, nu]);
+    onLogin(nu);
+  };
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', marginBottom: 32 }}>
-      {labels.map((label, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', flex: i < labels.length - 1 ? 1 : 'none' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <div style={{
-              width: 28, height: 28, borderRadius: '50%',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontWeight: 700, fontSize: 12,
-              background: i < current ? C.navy : i === current ? C.gold : C.bgSub,
-              color: i <= current ? (i < current ? '#fff' : C.navy) : C.textLight,
-              border: i === current ? '2px solid ' + C.gold : 'none',
-            }}>
-              {i < current ? '✓' : i + 1}
-            </div>
-            <div style={{ fontSize: 10, marginTop: 5, color: i === current ? C.navy : C.textLight, fontWeight: i === current ? 700 : 400, whiteSpace: 'nowrap', letterSpacing: '0.03em' }}>{label}</div>
+    <div style={{ minHeight: "100vh", background: `linear-gradient(135deg, ${C.sidebar} 0%, #1a3a6e 100%)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ width: 440, background: C.white, borderRadius: 20, overflow: "hidden", boxShadow: "0 32px 80px rgba(0,0,0,0.3)" }}>
+        <div style={{ background: `linear-gradient(135deg, ${C.blue}, #0044B0)`, padding: "32px 40px", textAlign: "center" }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: "rgba(255,255,255,0.6)", letterSpacing: 3, marginBottom: 8 }}>SYNAPSEDEAL</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#fff" }}>M&A 案件受付ポータル</div>
+          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", marginTop: 6 }}>Medical M&A Deal Submission Platform</div>
+        </div>
+        <div style={{ padding: "32px 40px" }}>
+          <div style={{ display: "flex", gap: 0, marginBottom: 28, background: C.bg, borderRadius: 10, padding: 4 }}>
+            {["login", "signup"].map(t => (
+              <button key={t} onClick={() => { setTab(t); setErr(""); }} style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: "none", fontWeight: 700, fontSize: 14, cursor: "pointer", background: tab === t ? C.white : "transparent", color: tab === t ? C.blue : C.textMd, boxShadow: tab === t ? "0 2px 8px rgba(0,0,0,0.08)" : "none", transition: "all 0.2s" }}>
+                {t === "login" ? "ログイン" : "新規登録"}
+              </button>
+            ))}
           </div>
-          {i < labels.length - 1 && <div style={{ flex: 1, height: 1, background: i < current ? C.navy : C.border, margin: '0 8px', marginBottom: 18 }} />}
+
+          {err && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: C.danger, marginBottom: 16 }}>{err}</div>}
+
+          {tab === "signup" && (
+            <>
+              <div style={{ marginBottom: 14 }}>
+                <label style={sty.label}>会社名 <span style={{ color: C.danger }}>*</span></label>
+                <input style={sty.input} placeholder="例：○○M&Aアドバイザリー株式会社" value={form.company} onChange={e => setForm({ ...form, company: e.target.value })} />
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={sty.label}>担当者名 <span style={{ color: C.danger }}>*</span></label>
+                <input style={sty.input} placeholder="例：山田 太郎" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} />
+              </div>
+            </>
+          )}
+          <div style={{ marginBottom: 14 }}>
+            <label style={sty.label}>メールアドレス <span style={{ color: C.danger }}>*</span></label>
+            <input style={sty.input} type="email" placeholder="email@example.com" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+          </div>
+          <div style={{ marginBottom: 24 }}>
+            <label style={sty.label}>パスワード <span style={{ color: C.danger }}>*</span></label>
+            <input style={sty.input} type="password" placeholder="8文字以上" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+          </div>
+
+          <button style={{ ...sty.btn("primary"), width: "100%", justifyContent: "center", padding: "13px 0", fontSize: 15 }}
+            onClick={tab === "login" ? handleLogin : handleSignup}>
+            {tab === "login" ? "ログイン →" : "アカウント作成 →"}
+          </button>
+
+          {tab === "login" && (
+            <div style={{ marginTop: 20, padding: "14px", background: C.bg, borderRadius: 8, fontSize: 12, color: C.textSm, lineHeight: 1.7 }}>
+              <strong>デモアカウント</strong><br />
+              仲介会社: demo@mediaca.co.jp / demo1234<br />
+              管理者: next@synapsedeal.co.jp / admin1234
+            </div>
+          )}
         </div>
-      ))}
+      </div>
     </div>
-  )
+  );
 }
 
-function DropZone({ docKey, onFiles, files, isShared, onSharedChange, driveUploading, driveUploaded }) {
-  const [dragging, setDragging] = useState(false)
-  const inputRef = useRef()
-  const uploaded = files[docKey] || []
+// ============================================================
+// INTERMEDIARY PORTAL
+// ============================================================
+function IntermediaryPortal({ user, deals, onAddDeal, onUpdateDeal, onLogout }) {
+  const [view, setView] = useState("list"); // list | new | detail
+  const [selected, setSelected] = useState(null);
+  const myDeals = deals.filter(d => d.userId === user.id);
+
   return (
-    <div style={{ marginTop: 8 }}>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, cursor: 'pointer', fontSize: 12, color: C.textMuted }}>
-        <input type="checkbox" checked={!!isShared[docKey]} onChange={e => onSharedChange(docKey, e.target.checked)} />
-        <span>共有フォルダ・GoogleDrive経由で提供済み</span>
-      </label>
-      {!isShared[docKey] && (
-        <div
-          onDragOver={e => { e.preventDefault(); setDragging(true) }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={e => { e.preventDefault(); setDragging(false); onFiles(docKey, Array.from(e.dataTransfer.files)) }}
-          onClick={() => inputRef.current.click()}
-          style={{ border: '1px dashed ' + (dragging ? C.navy : C.borderDark), borderRadius: 4, padding: '14px 16px', textAlign: 'center', background: dragging ? '#F0EDD8' : C.bgSub, cursor: 'pointer' }}>
-          <input ref={inputRef} type="file" multiple style={{ display: 'none' }} onChange={e => onFiles(docKey, Array.from(e.target.files))} />
-          <div style={{ fontSize: 12, color: C.textLight, letterSpacing: '0.02em' }}>クリックまたはドラッグでアップロード</div>
-          {driveUploading && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>⏳ Google Driveにアップロード中...</div>}
-          {uploaded.length > 0 && uploaded.map((f, i) => {
-            const ok = driveUploaded && driveUploaded.includes(f.name)
-            return <div key={i} style={{ fontSize: 11, color: ok ? C.success : C.textMuted, background: ok ? C.successBg : C.bgSub, borderRadius: 2, padding: '2px 8px', marginTop: 4, display: 'inline-block' }}>{ok ? '✓ ' : '📎 '}{f.name}</div>
-          })}
+    <div style={{ display: "flex", minHeight: "100vh" }}>
+      {/* Sidebar */}
+      <div style={{ width: 240, background: C.sidebar, color: "#fff", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+        <div style={{ padding: "28px 24px 20px" }}>
+          <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(255,255,255,0.4)", letterSpacing: 3, marginBottom: 6 }}>SYNAPSEDEAL</div>
+          <div style={{ fontSize: 16, fontWeight: 800 }}>案件受付ポータル</div>
+          <div style={{ marginTop: 16, padding: "10px 12px", background: "rgba(255,255,255,0.07)", borderRadius: 10 }}>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 2 }}>ログイン中</div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{user.company}</div>
+            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>{user.contact}</div>
+          </div>
         </div>
-      )}
-      {isShared[docKey] && <div style={{ fontSize: 12, color: C.success, background: C.successBg, border: '1px solid #B0D8BC', borderRadius: 4, padding: '8px 12px' }}>提供済みとして登録しました</div>}
-    </div>
-  )
-}
-
-function SimpleDropZone({ label, onFile, fileName }) {
-  const [dragging, setDragging] = useState(false)
-  const inputRef = useRef()
-  return (
-    <div
-      onDragOver={e => { e.preventDefault(); setDragging(true) }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={e => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]) }}
-      onClick={() => inputRef.current.click()}
-      style={{ border: '1px dashed ' + (dragging ? C.navy : C.borderDark), borderRadius: 4, padding: '24px', textAlign: 'center', background: dragging ? '#F0EDD8' : C.bgSub, cursor: 'pointer' }}>
-      <input ref={inputRef} type="file" style={{ display: 'none' }} onChange={e => { if (e.target.files[0]) onFile(e.target.files[0]) }} />
-      <div style={{ fontSize: 12, color: C.textLight, marginBottom: 4, letterSpacing: '0.02em' }}>{label}</div>
-      {fileName && <div style={{ fontSize: 12, color: C.success, marginTop: 8 }}>{fileName}</div>}
-    </div>
-  )
-}
-
-// ==================== AUTH SCREEN ====================
-function AuthScreen() {
-  const [authMode, setAuthMode] = useState('login')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [signupDone, setSignupDone] = useState(false)
-
-  async function handleLogin() {
-    if (!email.trim() || !password.trim()) { setError('メールアドレスとパスワードを入力してください'); return }
-    setLoading(true); setError('')
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) setError('メールアドレスまたはパスワードが正しくありません')
-    setLoading(false)
-  }
-
-  async function handleSignup() {
-    if (!email.trim() || !password.trim()) { setError('メールアドレスとパスワードを入力してください'); return }
-    if (password.length < 6) { setError('パスワードは6文字以上で入力してください'); return }
-    if (password !== confirmPassword) { setError('パスワードが一致しません'); return }
-    setLoading(true); setError('')
-    const { error } = await supabase.auth.signUp({ email, password })
-    if (error) setError(error.message)
-    else setSignupDone(true)
-    setLoading(false)
-  }
-
-  async function handleGoogleLogin() {
-    await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } })
-  }
-
-  async function handleForgotPassword() {
-    if (!email.trim()) { alert('メールアドレスを入力してください'); return }
-    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + '/reset-password' })
-    if (error) alert('エラー: ' + error.message)
-    else alert('パスワードリセットメールを送信しました。')
-  }
-
-  const fieldStyle = { ...inp, padding: '11px 14px', fontSize: 14 }
-
-  if (signupDone) return (
-    <div style={{ minHeight: '100vh', background: C.navy, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT }}>
-      <div style={{ background: C.cream, borderRadius: 4, padding: '56px 52px', width: 440, textAlign: 'center' }}>
-        <div style={{ width: 48, height: 48, borderRadius: '50%', border: '2px solid ' + C.navy, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', fontSize: 20, color: C.navy }}>✓</div>
-        <div style={{ fontSize: 20, fontWeight: 700, color: C.navy, marginBottom: 12, letterSpacing: '-0.02em' }}>確認メールを送信しました</div>
-        <div style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.9, marginBottom: 32 }}>
-          <strong>{email}</strong> にメールを送信しました。<br />メール内のリンクよりアカウントを有効化してください。
-        </div>
-        <button onClick={() => { setAuthMode('login'); setSignupDone(false); setPassword(''); setConfirmPassword('') }} style={{ ...btn.primary, width: '100%', padding: '13px' }}>
-          ログイン画面へ
+        <nav style={{ flex: 1, padding: "0 12px" }}>
+          {[
+            { id: "list", icon: "📋", label: "案件一覧" },
+            { id: "new", icon: "➕", label: "新規案件登録" },
+          ].map(item => (
+            <button key={item.id} onClick={() => setView(item.id)} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "11px 14px", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 600, marginBottom: 4, background: view === item.id ? "rgba(0,86,214,0.3)" : "transparent", color: view === item.id ? "#fff" : "rgba(255,255,255,0.6)", transition: "all 0.15s" }}>
+              <span>{item.icon}</span>{item.label}
+            </button>
+          ))}
+        </nav>
+        <button onClick={onLogout} style={{ margin: "12px 16px 24px", background: "rgba(255,255,255,0.06)", border: "none", borderRadius: 8, padding: "10px 0", color: "rgba(255,255,255,0.5)", fontSize: 13, cursor: "pointer" }}>
+          ログアウト
         </button>
       </div>
+
+      {/* Main */}
+      <div style={{ flex: 1, padding: "32px 36px", overflow: "auto" }}>
+        {view === "list" && (
+          <DealList deals={myDeals} onSelect={(d) => { setSelected(d); setView("detail"); }} isAdmin={false} />
+        )}
+        {view === "new" && (
+          <DealForm onSubmit={(d) => { onAddDeal({ ...d, userId: user.id, introducedBy: user.id, stage: "情報収集中", submittedAt: new Date().toISOString().slice(0, 10), files: [], status: "active", fdFee: null, successFee: null }); setView("list"); }} />
+        )}
+        {view === "detail" && selected && (
+          <DealDetail deal={selected} isAdmin={false} onBack={() => setView("list")} onUpdate={(d) => { onUpdateDeal(d); setSelected(d); }} />
+        )}
+      </div>
     </div>
-  )
+  );
+}
+
+// ============================================================
+// ADMIN PORTAL
+// ============================================================
+function AdminPortal({ user, deals, users, onUpdateDeal, onBulkAdd, onLogout }) {
+  const [view, setView] = useState("dashboard");
+  const [selected, setSelected] = useState(null);
+
+  const pendingCount = deals.filter(d => d.status === "pending").length;
+
+  const navItems = [
+    { id: "dashboard", icon: "📊", label: "ダッシュボード" },
+    { id: "monthly", icon: "📅", label: "月次ファネル" },
+    { id: "pending", icon: "📬", label: "要確認", badge: pendingCount },
+    { id: "deals", icon: "📁", label: "案件一覧" },
+    { id: "pipeline", icon: "🔄", label: "パイプライン" },
+    { id: "newsletter", icon: "📰", label: "メルマガ抽出" },
+    { id: "companies", icon: "🏢", label: "仲介会社管理" },
+    { id: "import", icon: "📥", label: "Excelインポート" },
+  ];
 
   return (
-    <div style={{ minHeight: '100vh', background: C.navy, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT }}>
-      <div style={{ background: C.cream, borderRadius: 4, padding: '52px 52px', width: 460 }}>
-        <div style={{ textAlign: 'center', marginBottom: 36 }}>
-          <img src="/logo.png" alt="SynapseDeal" style={{ height: 42, marginBottom: 16 }} onError={e => e.target.style.display = 'none'} />
-          <div style={{ fontSize: 22, fontWeight: 700, color: C.navy, letterSpacing: '-0.03em' }}>SynapseDeal</div>
-          <div style={{ fontSize: 12, color: C.textLight, marginTop: 5, letterSpacing: '0.06em' }}>M&A Agent Platform</div>
+    <div style={{ display: "flex", minHeight: "100vh" }}>
+      <div style={{ width: 240, background: C.sidebar, color: "#fff", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+        <div style={{ padding: "28px 24px 20px" }}>
+          <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(255,255,255,0.4)", letterSpacing: 3, marginBottom: 6 }}>SYNAPSEDEAL</div>
+          <div style={{ fontSize: 16, fontWeight: 800 }}>管理者ダッシュボード</div>
+          <div style={{ marginTop: 16, padding: "10px 12px", background: "rgba(0,86,214,0.25)", borderRadius: 10, border: "1px solid rgba(0,86,214,0.4)" }}>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 2 }}>管理者</div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{user.contact}</div>
+          </div>
         </div>
+        <nav style={{ flex: 1, padding: "0 12px" }}>
+          {navItems.map(item => (
+            <button key={item.id} onClick={() => setView(item.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "11px 14px", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 600, marginBottom: 4, background: view === item.id ? "rgba(0,86,214,0.3)" : "transparent", color: view === item.id ? "#fff" : "rgba(255,255,255,0.6)", transition: "all 0.15s" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 10 }}><span>{item.icon}</span>{item.label}</span>
+              {item.badge > 0 && <span style={{ background: C.danger, color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 800 }}>{item.badge}</span>}
+            </button>
+          ))}
+        </nav>
+        <button onClick={onLogout} style={{ margin: "12px 16px 24px", background: "rgba(255,255,255,0.06)", border: "none", borderRadius: 8, padding: "10px 0", color: "rgba(255,255,255,0.5)", fontSize: 13, cursor: "pointer" }}>
+          ログアウト
+        </button>
+      </div>
 
-        <div style={{ display: 'flex', marginBottom: 28, borderBottom: '2px solid ' + C.border }}>
-          {['login', 'signup'].map((mode, i) => (
-            <button key={mode} onClick={() => { setAuthMode(mode); setError('') }}
-              style={{ flex: 1, padding: '10px', fontSize: 13, fontWeight: 700, border: 'none', background: 'none', cursor: 'pointer', color: authMode === mode ? C.navy : C.textLight, borderBottom: authMode === mode ? '2px solid ' + C.navy : '2px solid transparent', marginBottom: -2, fontFamily: FONT }}>
-              {i === 0 ? 'ログイン' : '新規登録'}
+      <div style={{ flex: 1, padding: "32px 36px", overflow: "auto" }}>
+        {view === "dashboard" && <AdminDashboard deals={deals} users={users} onSelectDeal={(d) => { setSelected(d); setView("dealDetail"); }} onGoPending={() => setView("pending")} />}
+        {view === "monthly" && <MonthlyFunnel deals={deals} onSelectDeal={(d) => { setSelected(d); setView("dealDetail"); }} />}
+        {view === "pending" && <PendingReview deals={deals} onUpdate={onUpdateDeal} onSelect={(d) => { setSelected(d); setView("dealDetail"); }} />}
+        {view === "deals" && <DealList deals={deals} onSelect={(d) => { setSelected(d); setView("dealDetail"); }} isAdmin={true} users={users} />}
+        {view === "pipeline" && <PipelineView deals={deals} onSelect={(d) => { setSelected(d); setView("dealDetail"); }} onUpdate={onUpdateDeal} />}
+        {view === "companies" && <CompanyView deals={deals} users={users} onSelect={(d) => { setSelected(d); setView("dealDetail"); }} />}
+        {view === "newsletter" && <NewsletterFilter onBulkAdd={(newDeals) => { onBulkAdd(newDeals); setView("pending"); }} />}
+        {view === "import" && <ExcelImport deals={deals} onBulkAdd={(newDeals) => { onBulkAdd(newDeals); setView("deals"); }} />}
+        {view === "dealDetail" && selected && (
+          <DealDetail deal={selected} isAdmin={true} onBack={() => setView(selected.status === "pending" ? "pending" : "deals")} onUpdate={(d) => { onUpdateDeal(d); setSelected(d); }} users={users} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// MONTHLY FUNNEL
+// ============================================================
+function MonthlyFunnel({ deals, onSelectDeal }) {
+  const activeDeals = deals.filter(d => d.status !== "pending");
+
+  // 月リスト生成（submittedAt から）
+  const months = [...new Set(
+    activeDeals.map(d => d.submittedAt?.slice(0, 7)).filter(Boolean)
+  )].sort().reverse();
+
+  const [mode, setMode] = useState("monthly"); // monthly | total
+  const [selectedMonth, setSelectedMonth] = useState(months[0] || "");
+
+  // 対象案件
+  const targetDeals = mode === "total"
+    ? activeDeals
+    : activeDeals.filter(d => d.submittedAt?.startsWith(selectedMonth));
+
+  // ファネル集計
+  const funnelStages = STAGES.filter(s => s !== "検討終了");
+  const funnelData = funnelStages.map(stage => ({
+    stage,
+    count: targetDeals.filter(d => d.stage === stage).length,
+    deals: targetDeals.filter(d => d.stage === stage),
+  }));
+
+  // 全体ファネル集計（月次表示時に参照用）
+  const totalByStage = {};
+  funnelStages.forEach(s => {
+    totalByStage[s] = activeDeals.filter(d => d.stage === s).length;
+  });
+
+  // 月別サマリー（月次一覧テーブル用）
+  const monthlySummary = months.map(m => {
+    const mDeals = activeDeals.filter(d => d.submittedAt?.startsWith(m));
+    return {
+      month: m,
+      total: mDeals.length,
+      byStage: Object.fromEntries(funnelStages.map(s => [s, mDeals.filter(d => d.stage === s).length])),
+      closed: mDeals.filter(d => d.stage === "クロージング").length,
+      ended: activeDeals.filter(d => d.stage === "検討終了" && d.submittedAt?.startsWith(m)).length,
+    };
+  });
+
+  const maxCount = Math.max(...funnelData.map(f => f.count), 1);
+  const [expandedStage, setExpandedStage] = useState(null);
+
+  // CSV出力
+  const exportCSV = () => {
+    const rows = [["月", "案件数", ...funnelStages]];
+    monthlySummary.forEach(m => {
+      rows.push([m.month, m.total, ...funnelStages.map(s => m.byStage[s] || 0)]);
+    });
+    const csv = rows.map(r => r.join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = "月次ファネル.csv"; a.click();
+  };
+
+  return (
+    <div>
+      {/* ヘッダー */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>月次ファネル管理</h1>
+          <p style={{ color: C.textSm, fontSize: 13, margin: "4px 0 0" }}>面談等の進捗を月次・全体で確認</p>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button style={sty.btn("ghost", true)} onClick={exportCSV}>📥 CSV出力</button>
+        </div>
+      </div>
+
+      {/* モード切替タブ */}
+      <div style={{ display: "flex", gap: 0, borderBottom: `2px solid ${C.border}`, marginBottom: 24 }}>
+        {[{ id: "monthly", label: "月次結果" }, { id: "total", label: "全体累計" }].map(t => (
+          <button key={t.id} onClick={() => setMode(t.id)} style={{ padding: "10px 28px", border: "none", background: "none", cursor: "pointer", fontWeight: 700, fontSize: 14, color: mode === t.id ? C.blue : C.textSm, borderBottom: mode === t.id ? `2px solid ${C.blue}` : "2px solid transparent", marginBottom: -2 }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 月選択（月次モード時） */}
+      {mode === "monthly" && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+          {months.map(m => (
+            <button key={m} onClick={() => setSelectedMonth(m)} style={{ padding: "7px 16px", borderRadius: 20, border: `1.5px solid ${selectedMonth === m ? C.blue : C.border}`, background: selectedMonth === m ? C.blueLt : C.white, color: selectedMonth === m ? C.blue : C.textMd, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+              {m.replace("-", "年")}月
             </button>
           ))}
         </div>
+      )}
 
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, color: C.textMuted }}>メールアドレス</label>
-          <input style={fieldStyle} type="email" placeholder="email@example.com" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === 'Enter' && (authMode === 'login' ? handleLogin() : handleSignup())} />
-        </div>
-        <div style={{ marginBottom: authMode === 'signup' ? 16 : 8 }}>
-          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, color: C.textMuted }}>パスワード{authMode === 'signup' ? '（6文字以上）' : ''}</label>
-          <input style={fieldStyle} type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && (authMode === 'login' ? handleLogin() : handleSignup())} />
-        </div>
-        {authMode === 'login' && (
-          <div style={{ textAlign: 'right', marginBottom: 20 }}>
-            <button onClick={handleForgotPassword} style={{ fontSize: 11, color: C.textLight, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontFamily: FONT }}>
-              パスワードをお忘れの方
-            </button>
-          </div>
-        )}
-        {authMode === 'signup' && (
-          <div style={{ marginBottom: 24 }}>
-            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, color: C.textMuted }}>パスワード確認</label>
-            <input style={fieldStyle} type="password" placeholder="••••••••" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSignup()} />
-          </div>
-        )}
-
-        {error && <div style={{ fontSize: 12, color: C.danger, background: C.dangerBg, border: '1px solid #E8C0C0', borderRadius: 4, padding: '10px 14px', marginBottom: 16 }}>{error}</div>}
-
-        <button onClick={authMode === 'login' ? handleLogin : handleSignup} disabled={loading}
-          style={{ ...btn.primary, width: '100%', padding: '13px', fontSize: 14, opacity: loading ? 0.6 : 1 }}>
-          {loading ? '処理中...' : authMode === 'login' ? 'ログイン' : 'アカウントを作成する'}
-        </button>
-
-        <Divider label="または" />
-
-        <button onClick={handleGoogleLogin} style={{ ...btn.secondary, width: '100%', padding: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
-          <svg width="16" height="16" viewBox="0 0 48 48">
-            <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
-            <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
-            <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
-            <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
-          </svg>
-          Googleでログイン / 登録
-        </button>
-      </div>
-    </div>
-  )
-}
-
-// ==================== RESET PASSWORD ====================
-function ResetPasswordPage() {
-  const [password, setPassword] = useState('')
-  const [confirm, setConfirm] = useState('')
-  const [done, setDone] = useState(false)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  async function handleReset() {
-    if (password.length < 6) { setError('パスワードは6文字以上'); return }
-    if (password !== confirm) { setError('パスワードが一致しません'); return }
-    setLoading(true)
-    const { error } = await supabase.auth.updateUser({ password })
-    if (error) setError(error.message)
-    else setDone(true)
-    setLoading(false)
-  }
-
-  const fieldStyle = { ...inp, padding: '11px 14px', fontSize: 14 }
-
-  if (done) return (
-    <div style={{ minHeight: '100vh', background: C.navy, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT }}>
-      <div style={{ background: C.cream, borderRadius: 4, padding: '52px', width: 420, textAlign: 'center' }}>
-        <div style={{ fontSize: 20, fontWeight: 700, color: C.navy, marginBottom: 20 }}>パスワードを設定しました</div>
-        <button onClick={() => window.location.href = '/'} style={{ ...btn.primary, width: '100%', padding: '13px' }}>ログイン画面へ</button>
-      </div>
-    </div>
-  )
-
-  return (
-    <div style={{ minHeight: '100vh', background: C.navy, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT }}>
-      <div style={{ background: C.cream, borderRadius: 4, padding: '52px', width: 420 }}>
-        <div style={{ textAlign: 'center', marginBottom: 36 }}>
-          <img src="/logo.png" alt="SynapseDeal" style={{ height: 38, marginBottom: 14 }} onError={e => e.target.style.display = 'none'} />
-          <div style={{ fontSize: 18, fontWeight: 700, color: C.navy }}>新しいパスワードを設定</div>
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, color: C.textMuted }}>新しいパスワード</label>
-          <input type="password" style={fieldStyle} placeholder="6文字以上" value={password} onChange={e => setPassword(e.target.value)} />
-        </div>
-        <div style={{ marginBottom: 24 }}>
-          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, color: C.textMuted }}>パスワード確認</label>
-          <input type="password" style={fieldStyle} placeholder="もう一度入力" value={confirm} onChange={e => setConfirm(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleReset()} />
-        </div>
-        {error && <div style={{ fontSize: 12, color: C.danger, background: C.dangerBg, borderRadius: 4, padding: '10px 14px', marginBottom: 16 }}>{error}</div>}
-        <button onClick={handleReset} disabled={loading} style={{ ...btn.primary, width: '100%', padding: '13px', opacity: loading ? 0.6 : 1 }}>
-          {loading ? '設定中...' : '設定する'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-// ==================== DOMAIN NOT ALLOWED ====================
-function DomainNotAllowedScreen({ email, onLogout }) {
-  const domain = email?.split('@')[1] || ''
-  return (
-    <div style={{ minHeight: '100vh', background: C.navy, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT }}>
-      <div style={{ background: C.cream, borderRadius: 4, padding: '56px 52px', width: 500, textAlign: 'center' }}>
-        <div style={{ fontSize: 20, fontWeight: 700, color: C.navy, marginBottom: 12 }}>アクセスが制限されています</div>
-        <div style={{ fontSize: 13, color: C.textMuted, lineHeight: 2, marginBottom: 28 }}>
-          <strong>@{domain}</strong> はSynapseDealの利用が許可されていません。<br />ご利用をご希望の場合は、こちらよりお申し込みください。
-        </div>
-        <div style={{ background: '#F8F6E8', border: '1px solid ' + C.borderDark, borderRadius: 4, padding: '20px 24px', marginBottom: 28, textAlign: 'left' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.navy, marginBottom: 12 }}>ご利用申請について</div>
-          <div style={{ fontSize: 13, color: C.textMuted, lineHeight: 2 }}>
-            法人向けエンタープライズプランのみご提供<br />
-            お問い合わせ後、審査の上ご連絡いたします<br />
-            info@synapsedeal.co.jp
-          </div>
-        </div>
-        <a href="mailto:info@synapsedeal.co.jp?subject=SynapseDeal利用申請"
-          style={{ display: 'block', ...btn.primary, textDecoration: 'none', padding: '13px', marginBottom: 10 }}>
-          利用申請メールを送る
-        </a>
-        <button onClick={onLogout} style={{ ...btn.ghost, width: '100%', padding: '11px' }}>ログアウト</button>
-      </div>
-    </div>
-  )
-}
-
-// ==================== ONBOARDING ====================
-function OnboardingScreen({ session, onComplete }) {
-  const [companyName, setCompanyName] = useState('')
-  const [contactName, setContactName] = useState('')
-  const [tel, setTel] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  async function handleSave() {
-    if (!companyName.trim() || !contactName.trim()) { setError('会社名と担当者名は必須です'); return }
-    setLoading(true)
-    const { error } = await supabase.from('company_profiles').upsert({ user_id: session.user.id, company_name: companyName, contact_name: contactName, email: session.user.email, tel })
-    if (error) { setError('保存に失敗しました: ' + error.message); setLoading(false); return }
-    localStorage.setItem(USERS_KEY, JSON.stringify([{ id: '1', name: contactName, email: session.user.email, role: 'admin' }]))
-    setLoading(false)
-    onComplete({ companyName, contactName })
-  }
-
-  const fieldStyle = { ...inp, padding: '11px 14px', fontSize: 14 }
-  const labelStyle = { display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, color: C.textMuted }
-
-  return (
-    <div style={{ minHeight: '100vh', background: C.navy, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT }}>
-      <div style={{ background: C.cream, borderRadius: 4, padding: '52px', width: 500 }}>
-        <div style={{ textAlign: 'center', marginBottom: 40 }}>
-          <img src="/logo.png" alt="SynapseDeal" style={{ height: 40, marginBottom: 16 }} onError={e => e.target.style.display = 'none'} />
-          <div style={{ fontSize: 20, fontWeight: 700, color: C.navy }}>ようこそ、SynapseDealへ</div>
-          <div style={{ fontSize: 12, color: C.textLight, marginTop: 8, lineHeight: 1.7 }}>まず会社の基本情報を登録してください</div>
-        </div>
-        <div style={{ marginBottom: 18 }}>
-          <label style={labelStyle}>会社名 <span style={{ color: C.danger }}>*</span></label>
-          <input style={fieldStyle} placeholder="株式会社〇〇" value={companyName} onChange={e => setCompanyName(e.target.value)} />
-        </div>
-        <div style={{ marginBottom: 18 }}>
-          <label style={labelStyle}>担当者名 <span style={{ color: C.danger }}>*</span></label>
-          <input style={fieldStyle} placeholder="山田 太郎" value={contactName} onChange={e => setContactName(e.target.value)} />
-        </div>
-        <div style={{ marginBottom: 18 }}>
-          <label style={labelStyle}>メールアドレス</label>
-          <input style={{ ...fieldStyle, background: C.bgSub, color: C.textLight }} value={session.user.email} disabled />
-        </div>
-        <div style={{ marginBottom: 32 }}>
-          <label style={labelStyle}>電話番号（任意）</label>
-          <input style={fieldStyle} placeholder="03-0000-0000" value={tel} onChange={e => setTel(e.target.value)} />
-        </div>
-        {error && <div style={{ fontSize: 12, color: C.danger, background: C.dangerBg, borderRadius: 4, padding: '10px 14px', marginBottom: 16 }}>{error}</div>}
-        <button onClick={handleSave} disabled={loading} style={{ ...btn.primary, width: '100%', padding: '14px', fontSize: 14, opacity: loading ? 0.6 : 1 }}>
-          {loading ? '登録中...' : '登録して始める'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-// ==================== DASHBOARD ====================
-function Dashboard({ session, deals, tickets, companyName, onNavigate }) {
-  const activeDeals = deals.filter(d => d.phase !== 'closing')
-  const closingDeals = deals.filter(d => d.phase === 'closing')
-  const phaseLabel = (key) => PHASES.find(p => p.key === key)?.label || key
-
-  const kpis = [
-    { label: 'ゲキラクIMチケット', value: tickets, unit: '枚', sub: 'チケット残数', onClick: () => onNavigate('gekiraku_im') },
-    { label: '進行中案件', value: activeDeals.length, unit: '件', sub: 'クロージング前', onClick: () => onNavigate('deals') },
-    { label: 'クロージング', value: closingDeals.length, unit: '件', sub: '最終フェーズ', onClick: () => onNavigate('deals') },
-    { label: '総案件数', value: deals.length, unit: '件', sub: '全フェーズ合計', onClick: () => onNavigate('deals') },
-  ]
-
-  const services = [
-    { key: 'pipeline', title: '営業パイプライン', desc: '売り手候補の発掘・接触・アドバイザリー契約締結後管理', available: true },
-    { key: 'gekiraku_im', title: 'ゲキラクIM', desc: 'M&A案件概要書（IM）の作成支援サービス', available: true },
-    { key: 'deals', title: '案件管理', desc: '進行案件の進捗管理・DDサポート', available: true },
-    { key: 'scoring', title: '候補先選定', desc: 'AI候補先生成・6軸スコアリング・Comps比較', available: true },
-    { key: 'contract', title: '契約書作成', desc: 'NDA・LOI・SPA・アドバイザリー契約をAI自動生成', available: true },
-    { key: 'dd', title: 'DD支援', desc: '財務DDの計画策定・論点抽出・レポート生成', available: true },
-    { key: 'valuation', title: 'バリュエーション', desc: 'DCF・倍率法・修正純資産法で企業価値を算定', available: true },
-  ]
-
-  return (
-    <div style={{ maxWidth: 1200, margin: '0 auto', padding: '36px 32px', fontFamily: FONT }}>
-      <div style={{ marginBottom: 32, paddingBottom: 20, borderBottom: '2px solid ' + C.navy, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.gold, letterSpacing: '0.1em', marginBottom: 6 }}>DASHBOARD</div>
-          <div style={{ fontSize: 28, fontWeight: 700, color: C.navy, letterSpacing: '-0.03em' }}>{companyName || 'SynapseDeal'}</div>
-          <div style={{ fontSize: 13, color: C.textMuted, marginTop: 4 }}>{session?.user?.email}</div>
-        </div>
-        <div style={{ fontSize: 12, color: C.textLight }}>{new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })}</div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 32 }}>
-        {kpis.map((kpi, i) => (
-          <div key={i} onClick={kpi.onClick}
-            style={{ background: i === 0 ? 'linear-gradient(135deg, ' + C.navy + ' 0%, #2D4160 100%)' : C.bgCard, borderRadius: 12, padding: '22px 22px', cursor: 'pointer', border: i === 0 ? 'none' : '1px solid ' + C.border, boxShadow: i === 0 ? '0 4px 20px rgba(27,43,75,0.18)' : '0 1px 4px rgba(0,0,0,0.04)', transition: 'transform 0.15s, box-shadow 0.15s' }}
-            onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = i === 0 ? '0 8px 28px rgba(27,43,75,0.25)' : '0 4px 12px rgba(0,0,0,0.08)' }}
-            onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = i === 0 ? '0 4px 20px rgba(27,43,75,0.18)' : '0 1px 4px rgba(0,0,0,0.04)' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: i === 0 ? C.gold : C.textMuted, letterSpacing: '0.06em', marginBottom: 10 }}>{kpi.label}</div>
-            <div style={{ fontSize: 40, fontWeight: 800, color: i === 0 ? (kpi.value > 0 ? C.cream : '#FF6B6B') : C.navy, lineHeight: 1, marginBottom: 6, fontFamily: 'monospace' }}>
-              {fmtNum(kpi.value)}<span style={{ fontSize: 14, marginLeft: 4, fontWeight: 400, color: i === 0 ? 'rgba(255,255,255,0.5)' : C.textMuted }}>{kpi.unit}</span>
-            </div>
-            <div style={{ fontSize: 11, color: i === 0 ? 'rgba(255,255,255,0.5)' : C.textLight }}>{kpi.sub}</div>
+      {/* KPIカード行 */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 24 }}>
+        {[
+          { label: mode === "monthly" ? `${selectedMonth?.replace("-","年")}月 新規受付` : "累計受付案件", value: targetDeals.length, color: C.blue },
+          { label: "TOP面談", value: funnelData.find(f => f.stage === "TOP面談")?.count || 0, color: "#a78bfa" },
+          { label: "LOI提出", value: funnelData.find(f => f.stage === "LOI提出")?.count || 0, color: C.warn },
+          { label: "クロージング", value: funnelData.find(f => f.stage === "クロージング")?.count || 0, color: C.success },
+        ].map(({ label, value, color }) => (
+          <div key={label} style={{ ...sty.card, marginBottom: 0, borderTop: `3px solid ${color}`, padding: "16px 20px" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.textSm, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{label}</div>
+            <div style={{ fontSize: 30, fontWeight: 900, color }}>{value}</div>
           </div>
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20, marginBottom: 32 }}>
-        <div style={{ background: 'linear-gradient(135deg, ' + C.navy + ' 0%, #1E3A5F 100%)', borderRadius: 12, padding: '28px 32px', boxShadow: '0 4px 20px rgba(27,43,75,0.15)', position: 'relative', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', right: -20, top: -20, width: 120, height: 120, borderRadius: '50%', background: 'rgba(201,168,76,0.08)' }} />
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, letterSpacing: '0.12em', marginBottom: 10 }}>GEKIRAKU IM</div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: C.cream, marginBottom: 10, lineHeight: 1.4 }}>案件概要書（IM）の作成を<br/>支援する</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-            <div style={{ background: 'rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'baseline', gap: 4 }}>
-              <span style={{ fontSize: 24, fontWeight: 800, color: tickets > 0 ? C.gold : '#FF6B6B', fontFamily: 'monospace' }}>{tickets}</span>
-              <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>枚残</span>
-            </div>
-            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>チケット残数</div>
+      {/* ファネルバーチャート + 案件リスト */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 24 }}>
+        {/* ファネルバー */}
+        <div style={sty.card}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>
+            {mode === "monthly" ? `${selectedMonth?.replace("-","年")}月のステージ分布` : "全体累計 ステージ分布"}
           </div>
-          <button onClick={() => onNavigate('gekiraku_im')}
-            style={{ background: C.gold, color: '#fff', border: 'none', borderRadius: 8, padding: '10px 24px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
-            📋 IM作成を依頼する
-          </button>
-        </div>
-
-        <div style={{ background: C.bgCard, border: '1px solid ' + C.border, borderRadius: 12, padding: '22px 24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.navy }}>📁 最近の案件</div>
-            <button onClick={() => onNavigate('deals')} style={{ fontSize: 11, color: C.textMuted, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontFamily: FONT }}>すべて見る →</button>
-          </div>
-          {deals.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '24px 0', color: C.textLight, fontSize: 13 }}>
-              案件がありません
-              <div style={{ marginTop: 10 }}>
-                <button onClick={() => onNavigate('deals')} style={{ ...btn.secondary, padding: '7px 16px', fontSize: 12 }}>新規案件を作成</button>
-              </div>
-            </div>
-          ) : (
-            deals.slice(0, 4).map((deal, i) => (
-              <div key={deal.id} onClick={() => onNavigate('deals')}
-                style={{ padding: '9px 0', borderBottom: i < Math.min(deals.length, 4) - 1 ? '1px solid ' + C.border : 'none', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                onMouseEnter={e => e.currentTarget.style.opacity = '0.7'}
-                onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{deal.deal_name}</div>
-                  <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>{deal.industry || '—'}</div>
+          {funnelData.map(({ stage, count, deals: sDeals }) => (
+            <div key={stage} style={{ marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: STAGE_COLORS[stage] }} />
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{stage}</span>
                 </div>
-                <Badge>{phaseLabel(deal.phase)}</Badge>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: STAGE_COLORS[stage] }}>{count}件</span>
+                  {mode === "monthly" && totalByStage[stage] > 0 && (
+                    <span style={{ fontSize: 11, color: C.textSm }}>(累計{totalByStage[stage]})</span>
+                  )}
+                </div>
               </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      <div>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, letterSpacing: '0.08em', marginBottom: 14 }}>利用可能なサービス</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12 }}>
-          {services.map((s, i) => (
-            <div key={i} onClick={() => s.available && s.key && onNavigate(s.key)}
-              style={{ background: s.available ? C.bgCard : C.bgSub, borderRadius: 6, padding: '18px 22px', cursor: s.available ? 'pointer' : 'default', border: '2px solid ' + C.border, opacity: s.available ? 1 : 0.45, transition: 'all 0.15s' }}
-              onMouseEnter={e => { if (s.available) { e.currentTarget.style.borderColor = C.navy; e.currentTarget.style.background = C.bgSub } }}
-              onMouseLeave={e => { if (s.available) { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.bgCard } }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.navy, marginBottom: 5 }}>{s.title}</div>
-              <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.6 }}>{s.desc}</div>
+              <div
+                style={{ height: 28, background: C.bg, borderRadius: 6, overflow: "hidden", cursor: count > 0 ? "pointer" : "default" }}
+                onClick={() => count > 0 && setExpandedStage(expandedStage === stage ? null : stage)}
+              >
+                <div style={{ height: "100%", width: `${(count / maxCount) * 100}%`, background: STAGE_COLORS[stage], borderRadius: 6, minWidth: count > 0 ? 28 : 0, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8, transition: "width 0.4s ease" }}>
+                  {count > 0 && <span style={{ fontSize: 11, color: "#fff", fontWeight: 700 }}>{count}</span>}
+                </div>
+              </div>
+              {/* 展開した案件リスト */}
+              {expandedStage === stage && sDeals.length > 0 && (
+                <div style={{ marginTop: 8, background: C.bg, borderRadius: 8, padding: "8px 0" }}>
+                  {sDeals.map(d => (
+                    <div key={d.id} onClick={() => onSelectDeal(d)} style={{ display: "flex", justifyContent: "space-between", padding: "6px 12px", cursor: "pointer", fontSize: 12, borderRadius: 6 }}
+                      onMouseEnter={e => e.currentTarget.style.background = C.blueLt}
+                      onMouseLeave={e => e.currentTarget.style.background = ""}>
+                      <span style={{ fontWeight: 600 }}>{d.companyName}</span>
+                      <span style={{ color: C.textSm }}>{d.specialty} / {d.prefecture}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
+
+        {/* 月次サマリーテーブル */}
+        <div style={sty.card}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>月次サマリー</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+                  <th style={{ textAlign: "left", padding: "6px 10px", color: C.textSm, fontWeight: 700 }}>月</th>
+                  <th style={{ textAlign: "center", padding: "6px 8px", color: C.textSm, fontWeight: 700 }}>受付</th>
+                  <th style={{ textAlign: "center", padding: "6px 8px", color: "#60a5fa", fontWeight: 700 }}>NDA</th>
+                  <th style={{ textAlign: "center", padding: "6px 8px", color: "#a78bfa", fontWeight: 700 }}>TOP</th>
+                  <th style={{ textAlign: "center", padding: "6px 8px", color: C.warn, fontWeight: 700 }}>LOI</th>
+                  <th style={{ textAlign: "center", padding: "6px 8px", color: C.success, fontWeight: 700 }}>CL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {monthlySummary.length === 0 && (
+                  <tr><td colSpan={6} style={{ padding: "20px 0", textAlign: "center", color: C.textSm }}>データなし</td></tr>
+                )}
+                {monthlySummary.map(m => (
+                  <tr key={m.month}
+                    onClick={() => { setMode("monthly"); setSelectedMonth(m.month); }}
+                    style={{ borderBottom: `1px solid ${C.border}`, cursor: "pointer", background: mode === "monthly" && selectedMonth === m.month ? C.blueLt : "" }}
+                    onMouseEnter={e => { if (!(mode === "monthly" && selectedMonth === m.month)) e.currentTarget.style.background = C.bg; }}
+                    onMouseLeave={e => { if (!(mode === "monthly" && selectedMonth === m.month)) e.currentTarget.style.background = ""; }}>
+                    <td style={{ padding: "8px 10px", fontWeight: 700 }}>{m.month.replace("-", "年")}月</td>
+                    <td style={{ padding: "8px 8px", textAlign: "center", fontWeight: 700 }}>{m.total}</td>
+                    <td style={{ padding: "8px 8px", textAlign: "center", color: "#60a5fa", fontWeight: 600 }}>{m.byStage["NDA締結"] || 0}</td>
+                    <td style={{ padding: "8px 8px", textAlign: "center", color: "#a78bfa", fontWeight: 600 }}>{m.byStage["TOP面談"] || 0}</td>
+                    <td style={{ padding: "8px 8px", textAlign: "center", color: C.warn, fontWeight: 600 }}>{m.byStage["LOI提出"] || 0}</td>
+                    <td style={{ padding: "8px 8px", textAlign: "center", color: C.success, fontWeight: 700 }}>{m.byStage["クロージング"] || 0}</td>
+                  </tr>
+                ))}
+                {/* 合計行 */}
+                <tr style={{ borderTop: `2px solid ${C.border}`, background: C.bg, fontWeight: 800 }}>
+                  <td style={{ padding: "8px 10px", color: C.blue }}>累計</td>
+                  <td style={{ padding: "8px 8px", textAlign: "center", color: C.blue }}>{activeDeals.length}</td>
+                  {["NDA締結","TOP面談","LOI提出","クロージング"].map(s => (
+                    <td key={s} style={{ padding: "8px 8px", textAlign: "center", color: STAGE_COLORS[s] }}>
+                      {totalByStage[s] || 0}
+                    </td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* 対象案件一覧 */}
+      <div style={sty.card}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>
+          {mode === "monthly" ? `${selectedMonth?.replace("-","年")}月 受付案件一覧` : "全案件一覧"}
+          <span style={{ marginLeft: 10, fontSize: 13, color: C.textSm, fontWeight: 400 }}>{targetDeals.length}件</span>
+        </div>
+        {targetDeals.length === 0 ? (
+          <div style={{ padding: "30px 0", textAlign: "center", color: C.textSm }}>該当案件なし</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+                {["法人名", "診療科", "都道府県", "希望価格", "マルチプル", "現ステージ", "受付日"].map(h => (
+                  <th key={h} style={{ textAlign: "left", padding: "7px 10px", fontSize: 12, color: C.textSm, fontWeight: 700 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {targetDeals.map(d => (
+                <tr key={d.id} onClick={() => onSelectDeal(d)} style={{ borderBottom: `1px solid ${C.border}`, cursor: "pointer" }}
+                  onMouseEnter={e => e.currentTarget.style.background = C.blueLt}
+                  onMouseLeave={e => e.currentTarget.style.background = ""}>
+                  <td style={{ padding: "9px 10px", fontWeight: 700, fontSize: 13 }}>{d.companyName}</td>
+                  <td style={{ padding: "9px 10px", fontSize: 13 }}>{d.specialty}</td>
+                  <td style={{ padding: "9px 10px", fontSize: 13 }}>{d.prefecture}</td>
+                  <td style={{ padding: "9px 10px", fontSize: 12, fontFamily: "monospace" }}>{d.hopedPrice ? `¥${fmt(d.hopedPrice)}千` : "—"}</td>
+                  <td style={{ padding: "9px 10px", fontSize: 13, fontWeight: 800, color: C.blue }}>{multiple(d.hopedPrice, d.ebitdaReal)}</td>
+                  <td style={{ padding: "9px 10px" }}><Tag label={d.stage} color={STAGE_COLORS[d.stage]} /></td>
+                  <td style={{ padding: "9px 10px", fontSize: 12, color: C.textSm }}>{d.submittedAt}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
-  )
+  );
 }
 
-// ==================== GEKIRAKU IM ====================
+// ============================================================
+// ADMIN DASHBOARD
+// ============================================================
+function AdminDashboard({ deals, users, onSelectDeal, onGoPending }) {
+  const [selectedStage, setSelectedStage] = useState(null);
 
-function TicketPurchaseModal({ onClose }) {
-  const API = import.meta.env.VITE_API_URL || 'https://synapsedeal-production.up.railway.app'
-  const [selected, setSelected] = useState(null)
-  const [sending, setSending] = useState(false)
-  const [done, setDone] = useState(false)
+  const pending = deals.filter(d => d.status === "pending");
+  const active = deals.filter(d => d.stage !== "検討終了" && d.status !== "pending");
+  const stageMap = {};
+  STAGES.forEach(s => stageMap[s] = deals.filter(d => d.stage === s && d.status !== "pending"));
 
-  const plans = [
-    { id: 'trial', name: 'トライアルプラン', tickets: 3, price: 500000, label: '50万円', desc: 'まずはお試し' },
-    { id: 'basic', name: 'ベーシック', tickets: 10, price: 2000000, label: '200万円', desc: '標準のプラン' },
-    { id: 'pro', name: 'プロ', tickets: 50, price: 7500000, label: '750万円', desc: '頻繁に利用される方向け' },
-    { id: 'enterprise', name: 'エンタープライズ', tickets: 100, price: 10000000, label: '1,000万円', desc: '大量・法人向け' },
-  ]
-
-  async function handlePurchase() {
-    if (!selected) return
-    setSending(true)
-    const plan = plans.find(p => p.id === selected)
-    try {
-      await fetch(API + '/notify-slack', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: ':ticket: *チケット購入申請*\n' +
-            '> プラン: ' + plan.name + '（' + plan.tickets + '枚）\n' +
-            '> 金額: ' + plan.label + '（税抜）\n' +
-            '> 申請日時: ' + new Date().toLocaleString('ja-JP')
-        })
-      })
-      setDone(true)
-    } catch(e) { alert('送信に失敗しました: ' + e.message) }
-    setSending(false)
-  }
+  const displayDeals = selectedStage ? stageMap[selectedStage] : active;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div style={{ background: '#fff', borderRadius: 16, padding: '40px 36px', maxWidth: 680, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
-        {done ? (
-          <div style={{ textAlign: 'center', padding: '20px 0' }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>✓</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: C.navy, marginBottom: 8 }}>申請を受け付けました</div>
-            <div style={{ fontSize: 14, color: C.textMuted, marginBottom: 24 }}>担当よりご連絡いたします。</div>
-            <button onClick={onClose} style={{ ...btn.primary, padding: '10px 32px' }}>閉じる</button>
-          </div>
-        ) : (
-          <>
-            <div style={{ marginBottom: 28 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.gold, letterSpacing: '0.1em', marginBottom: 6 }}>TICKET PURCHASE</div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: C.navy }}>チケット購入</div>
-              <div style={{ fontSize: 13, color: C.textMuted, marginTop: 6 }}>プランを選択して申請してください。担当よりご連絡いたします（費用はすべて税抜）。</div>
-            </div>
+    <div>
+      <div style={{ marginBottom: 28 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>ダッシュボード</h1>
+        <p style={{ color: C.textSm, margin: "4px 0 0", fontSize: 14 }}>ステージをクリックすると案件一覧にフィルタされます</p>
+      </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 28 }}>
-              {plans.map(plan => (
-                <div key={plan.id} onClick={() => setSelected(plan.id)}
-                  style={{ border: '2px solid ' + (selected === plan.id ? C.navy : C.border), borderRadius: 10, padding: '18px 20px', cursor: 'pointer', background: selected === plan.id ? C.navy : '#fff', transition: 'all 0.15s' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: selected === plan.id ? C.gold : C.textMuted, letterSpacing: '0.06em', marginBottom: 6 }}>{plan.name}</div>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 4 }}>
-                    <span style={{ fontSize: 32, fontWeight: 800, color: selected === plan.id ? '#fff' : C.navy, fontFamily: 'monospace' }}>{plan.tickets}</span>
-                    <span style={{ fontSize: 14, color: selected === plan.id ? 'rgba(255,255,255,0.7)' : C.textMuted }}>枚</span>
+      {/* 要確認バナー */}
+      {pending.length > 0 && (
+        <div onClick={onGoPending} style={{ background: "#fff7ed", border: `1.5px solid ${C.warn}`, borderRadius: 12, padding: "14px 20px", marginBottom: 24, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 22 }}>📬</span>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 15, color: "#92400e" }}>メールから {pending.length}件 の仮登録案件があります</div>
+              <div style={{ fontSize: 13, color: "#b45309", marginTop: 2 }}>確認・補完して本登録してください</div>
+            </div>
+          </div>
+          <span style={{ ...sty.btn("ghost", true), borderColor: C.warn, color: C.warn }}>確認する →</span>
+        </div>
+      )}
+
+      {/* Summary KPI */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 24 }}>
+        <KPICard label="進行中案件数" value={active.length} sub="検討終了・仮登録を除く" color={C.blue} />
+        <KPICard label="仲介会社数" value={users.filter(u => u.role === "intermediary").length} sub="登録済み" color={C.gold} />
+        <KPICard label="検討終了" value={stageMap["検討終了"]?.length || 0} sub="累計" color={C.textSm} />
+      </div>
+
+      {/* Clickable stage cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
+        {STAGES.filter(s => s !== "検討終了").map(s => {
+          const count = stageMap[s]?.length || 0;
+          const isActive = selectedStage === s;
+          return (
+            <div key={s}
+              onClick={() => setSelectedStage(isActive ? null : s)}
+              style={{
+                background: isActive ? STAGE_COLORS[s] : C.white,
+                border: `2px solid ${isActive ? STAGE_COLORS[s] : C.border}`,
+                borderRadius: 12, padding: "16px 18px", cursor: "pointer",
+                transition: "all 0.15s", boxShadow: isActive ? `0 4px 16px ${STAGE_COLORS[s]}44` : "none",
+              }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: isActive ? "rgba(255,255,255,0.8)" : C.textSm, marginBottom: 6, letterSpacing: 0.5 }}>{s}</div>
+              <div style={{ fontSize: 34, fontWeight: 900, color: isActive ? "#fff" : STAGE_COLORS[s], lineHeight: 1 }}>{count}</div>
+              <div style={{ fontSize: 11, color: isActive ? "rgba(255,255,255,0.6)" : C.textSm, marginTop: 4 }}>件 {count > 0 ? "▸ クリックで表示" : ""}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Filtered deal list */}
+      <div style={sty.card}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>
+            {selectedStage
+              ? <><Tag label={selectedStage} color={STAGE_COLORS[selectedStage]} /> <span style={{ marginLeft: 8 }}>の案件 {displayDeals.length}件</span></>
+              : `進行中案件 ${displayDeals.length}件`}
+          </div>
+          {selectedStage && (
+            <button style={sty.btn("ghost", true)} onClick={() => setSelectedStage(null)}>✕ フィルタ解除</button>
+          )}
+        </div>
+        {displayDeals.length === 0 ? (
+          <div style={{ padding: "40px 0", textAlign: "center", color: C.textSm }}>該当案件なし</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+                {["法人名", "診療科", "都道府県", "希望価格", "マルチプル", "ステージ", "Next Action"].map(h => (
+                  <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 12, color: C.textSm, fontWeight: 700 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {displayDeals.map(d => (
+                <tr key={d.id} onClick={() => onSelectDeal(d)} style={{ borderBottom: `1px solid ${C.border}`, cursor: "pointer" }}
+                  onMouseEnter={e => e.currentTarget.style.background = C.blueLt}
+                  onMouseLeave={e => e.currentTarget.style.background = ""}>
+                  <td style={{ padding: "10px 12px", fontWeight: 700, fontSize: 13 }}>{d.companyName}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 13 }}>{d.specialty}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 13 }}>{d.prefecture}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 13, fontFamily: "monospace" }}>{d.hopedPrice ? `¥${fmt(d.hopedPrice)}千` : "—"}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 13, fontWeight: 800, color: C.blue }}>{multiple(d.hopedPrice, d.ebitdaReal)}</td>
+                  <td style={{ padding: "10px 12px" }}><Tag label={d.stage} color={STAGE_COLORS[d.stage]} /></td>
+                  <td style={{ padding: "10px 12px", fontSize: 12, color: C.textMd }}>{d.nextAction || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PENDING REVIEW（メール仮登録の確認画面）
+// ============================================================
+function PendingReview({ deals, onUpdate, onSelect }) {
+  const pending = deals.filter(d => d.status === "pending");
+
+  const approve = (d) => onUpdate({ ...d, status: "active" });
+  const reject  = (d) => onUpdate({ ...d, status: "rejected" });
+
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>要確認案件 <span style={{ fontSize: 16, color: C.danger, fontWeight: 700 }}>({pending.length}件)</span></h1>
+        <p style={{ color: C.textSm, fontSize: 14, margin: "4px 0 0" }}>メールから自動取込された仮登録案件です。内容を確認して本登録または却下してください。</p>
+      </div>
+
+      {pending.length === 0 ? (
+        <div style={{ ...sty.card, textAlign: "center", padding: "60px 0", color: C.textSm }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
+          <div style={{ fontWeight: 700 }}>要確認案件はありません</div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {pending.map(d => (
+            <div key={d.id} style={{ ...sty.card, borderLeft: `4px solid ${C.warn}` }}>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 12 }}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontSize: 18 }}>📬</span>
+                    <span style={{ fontWeight: 800, fontSize: 16 }}>{d.companyName}</span>
+                    <Tag label="仮登録" color={C.warn} />
                   </div>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: selected === plan.id ? C.gold : C.navy }}>{plan.label}</div>
-                  <div style={{ fontSize: 11, color: selected === plan.id ? 'rgba(255,255,255,0.6)' : C.textLight, marginTop: 4 }}>{plan.desc}</div>
+                  <div style={{ fontSize: 13, color: C.textSm }}>
+                    紹介元: {d.introducedByCompany || d.introducedByName || d.introducedByEmail || "—"}
+                    {d.introducedByEmail && <span style={{ marginLeft: 8, color: C.blue }}>({d.introducedByEmail})</span>}
+                  </div>
+                  {d.emailSubject && <div style={{ fontSize: 12, color: C.textSm, marginTop: 2 }}>件名: {d.emailSubject}</div>}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button style={sty.btn("ghost", true)} onClick={() => onSelect(d)}>詳細・編集</button>
+                  <button style={sty.btn("primary", true)} onClick={() => approve(d)}>✅ 本登録</button>
+                  <button style={{ ...sty.btn("ghost", true), borderColor: C.danger, color: C.danger }} onClick={() => reject(d)}>✕ 却下</button>
+                </div>
+              </div>
+
+              {/* 解析された情報のプレビュー */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, padding: "12px 0", borderTop: `1px solid ${C.border}` }}>
+                {[
+                  ["診療科", d.specialty], ["都道府県", d.prefecture],
+                  ["売上", d.revenue ? `¥${fmt(d.revenue)}千` : "—"],
+                  ["希望価格", d.hopedPrice ? `¥${fmt(d.hopedPrice)}千` : "—"],
+                  ["マルチプル", multiple(d.hopedPrice, d.ebitdaReal)],
+                ].map(([k, v]) => (
+                  <div key={k}>
+                    <div style={{ fontSize: 11, color: C.textSm, fontWeight: 700, marginBottom: 2 }}>{k}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{v || "—"}</div>
+                  </div>
+                ))}
+              </div>
+
+              {d.memo && (
+                <div style={{ marginTop: 10, padding: "10px 12px", background: C.bg, borderRadius: 8, fontSize: 13, color: C.textMd }}>
+                  📝 {d.memo}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// DEAL LIST
+// ============================================================
+function DealList({ deals, onSelect, isAdmin, users }) {
+  const [q, setQ] = useState("");
+  const [stage, setStage] = useState("all");
+  const [spec, setSpec] = useState("all");
+  const filtered = deals.filter(d =>
+    (stage === "all" || d.stage === stage) &&
+    (spec === "all" || d.specialty === spec) &&
+    (!q || d.companyName.includes(q) || d.specialty.includes(q) || d.prefecture.includes(q))
+  );
+
+  const exportCSV = () => {
+    const headers = ["法人名", "診療科", "都道府県", "売上(千円)", "EBITDA実態(千円)", "希望価格(千円)", "マルチプル", "ステージ", "登録日"];
+    const rows = filtered.map(d => [d.companyName, d.specialty, d.prefecture, d.revenue, d.ebitdaReal, d.hopedPrice, multiple(d.hopedPrice, d.ebitdaReal), d.stage, d.submittedAt]);
+    const csv = [headers, ...rows].map(r => r.join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "案件一覧.csv"; a.click();
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>案件一覧</h1>
+        <button style={sty.btn("ghost", true)} onClick={exportCSV}>📥 CSV出力</button>
+      </div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+        <input style={{ ...sty.input, width: 220 }} placeholder="法人名・診療科で検索" value={q} onChange={e => setQ(e.target.value)} />
+        <select style={{ ...sty.input, width: 160 }} value={stage} onChange={e => setStage(e.target.value)}>
+          <option value="all">全ステージ</option>
+          {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <select style={{ ...sty.input, width: 140 }} value={spec} onChange={e => setSpec(e.target.value)}>
+          <option value="all">全診療科</option>
+          {SPECIALTIES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+      <div style={sty.card}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+              {["法人名", "診療科", "都道府県", "売上", "EBITDA実態", "希望価格", "倍率", isAdmin ? "紹介元" : null, "ステージ", "登録日"].filter(Boolean).map(h => (
+                <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 12, color: C.textSm, fontWeight: 700 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 && (
+              <tr><td colSpan={10} style={{ padding: "40px 0", textAlign: "center", color: C.textSm }}>案件がありません</td></tr>
+            )}
+            {filtered.map(d => {
+              const intro = users?.find(u => u.id === d.introducedBy);
+              return (
+                <tr key={d.id} onClick={() => onSelect(d)} style={{ borderBottom: `1px solid ${C.border}`, cursor: "pointer" }}
+                  onMouseEnter={e => e.currentTarget.style.background = C.blueLt}
+                  onMouseLeave={e => e.currentTarget.style.background = ""}>
+                  <td style={{ padding: "10px 10px", fontWeight: 700, fontSize: 13 }}>{d.companyName}</td>
+                  <td style={{ padding: "10px 10px", fontSize: 13 }}>{d.specialty}</td>
+                  <td style={{ padding: "10px 10px", fontSize: 13 }}>{d.prefecture}</td>
+                  <td style={{ padding: "10px 10px", fontSize: 12, fontFamily: "monospace" }}>{fmt(d.revenue)}</td>
+                  <td style={{ padding: "10px 10px", fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>{fmt(d.ebitdaReal)}</td>
+                  <td style={{ padding: "10px 10px", fontSize: 12, fontFamily: "monospace" }}>{fmt(d.hopedPrice)}</td>
+                  <td style={{ padding: "10px 10px", fontSize: 12, fontWeight: 800, color: C.blue }}>{multiple(d.hopedPrice, d.ebitdaReal)}</td>
+                  {isAdmin && <td style={{ padding: "10px 10px", fontSize: 12 }}>{intro?.company || "—"}</td>}
+                  <td style={{ padding: "10px 10px" }}><Tag label={d.stage} color={STAGE_COLORS[d.stage]} /></td>
+                  <td style={{ padding: "10px 10px", fontSize: 12, color: C.textSm }}>{d.submittedAt}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PIPELINE VIEW (Kanban)
+// ============================================================
+function PipelineView({ deals, onSelect, onUpdate }) {
+  const cols = STAGES.slice(0, 7); // exclude 検討終了 from main kanban
+
+  return (
+    <div>
+      <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>パイプライン</h1>
+      <p style={{ color: C.textSm, marginBottom: 24, fontSize: 14 }}>ステージをドラッグで変更可能</p>
+      <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 16 }}>
+        {cols.map(stage => {
+          const col = deals.filter(d => d.stage === stage);
+          return (
+            <div key={stage} style={{ minWidth: 200, flex: "0 0 200px" }}
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => { const id = e.dataTransfer.getData("dealId"); const d = deals.find(x => x.id === id); if (d) onUpdate({ ...d, stage }); }}>
+              <div style={{ background: STAGE_COLORS[stage] + "20", borderRadius: 10, padding: "10px 14px", marginBottom: 10, borderTop: `3px solid ${STAGE_COLORS[stage]}` }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: STAGE_COLORS[stage] }}>{stage}</div>
+                <div style={{ fontSize: 20, fontWeight: 800 }}>{col.length}</div>
+              </div>
+              {col.map(d => (
+                <div key={d.id} draggable
+                  onDragStart={e => e.dataTransfer.setData("dealId", d.id)}
+                  onClick={() => onSelect(d)}
+                  style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", marginBottom: 8, cursor: "grab", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>{d.companyName}</div>
+                  <div style={{ fontSize: 12, color: C.textSm }}>{d.specialty} / {d.prefecture}</div>
+                  {d.ebitdaReal && <div style={{ fontSize: 12, color: C.blue, fontWeight: 700, marginTop: 6 }}>EBITDA: ¥{fmt(d.ebitdaReal)}千</div>}
+                  {d.nextAction && <div style={{ fontSize: 11, color: C.textSm, marginTop: 4, borderTop: `1px solid ${C.border}`, paddingTop: 4 }}>▸ {d.nextAction}</div>}
                 </div>
               ))}
             </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
-            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
-              <button onClick={onClose} style={{ ...btn.secondary, padding: '10px 24px' }}>キャンセル</button>
-              <button onClick={handlePurchase} disabled={!selected || sending}
-                style={{ ...btn.primary, padding: '10px 32px', opacity: (!selected || sending) ? 0.4 : 1, cursor: (!selected || sending) ? 'not-allowed' : 'pointer' }}>
-                {sending ? '送信中...' : '🎫 チケット購入を申請する'}
-              </button>
+// ============================================================
+// COMPANY VIEW
+// ============================================================
+function CompanyView({ deals, users, onSelect }) {
+  const companies = users.filter(u => u.role === "intermediary");
+  return (
+    <div>
+      <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 24 }}>仲介会社管理</h1>
+      <div style={{ display: "grid", gap: 16 }}>
+        {companies.map(c => {
+          const cDeals = deals.filter(d => d.introducedBy === c.id);
+          return (
+            <div key={c.id} style={sty.card}>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>{c.company}</div>
+                  <div style={{ fontSize: 13, color: C.textSm }}>担当: {c.contact} | {c.email}</div>
+                </div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <KPICard label="紹介案件数" value={cDeals.length} color={C.blue} />
+                </div>
+              </div>
+              {cDeals.length > 0 && (
+                <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {cDeals.map(d => (
+                    <div key={d.id} onClick={() => onSelect(d)} style={{ background: C.blueLt, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.blue }}>
+                      {d.companyName} <Tag label={d.stage} color={STAGE_COLORS[d.stage]} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// DEAL DETAIL
+// ============================================================
+function DealDetail({ deal, isAdmin, onBack, onUpdate, users }) {
+  const [tab, setTab] = useState("overview");
+  const [editStage, setEditStage] = useState(deal.stage);
+  const [nextAction, setNextAction] = useState(deal.nextAction || "");
+  const [memo, setMemo] = useState(deal.memo || "");
+  const [fdFee, setFdFee] = useState(deal.fdFee || "");
+  const [successFee, setSuccessFee] = useState(deal.successFee || "");
+
+  const save = () => onUpdate({ ...deal, stage: editStage, nextAction, memo, fdFee: fdFee ? Number(fdFee) : null, successFee: successFee ? Number(successFee) : null });
+
+  const netCash = (deal.cash || 0) - (deal.debt || 0);
+  const adjPrice = deal.hopedPrice ? deal.hopedPrice + netCash : null;
+
+  const tabs = [
+    { id: "overview", label: "概要" },
+    { id: "financial", label: "財務情報" },
+    { id: "patients", label: "患者情報" },
+    { id: "files", label: "ファイル" },
+    ...(isAdmin ? [{ id: "admin", label: "管理情報" }] : []),
+  ];
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ ...sty.btn("ghost", true), marginBottom: 20 }}>← 一覧に戻る</button>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24 }}>
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>{deal.companyName}</h1>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Pill label={deal.specialty} /><Pill label={deal.prefecture} />
+            <Tag label={deal.stage} color={STAGE_COLORS[deal.stage]} />
+            <span style={{ fontSize: 13, color: C.textSm }}>登録: {deal.submittedAt}</span>
+          </div>
+        </div>
+        {isAdmin && (
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <select style={{ ...sty.input, width: 160 }} value={editStage} onChange={e => setEditStage(e.target.value)}>
+              {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <button style={sty.btn("primary", true)} onClick={save}>保存</button>
+          </div>
+        )}
+      </div>
+
+      {/* KPI Strip */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 24 }}>
+        <KPICard label="売上" value={`¥${fmt(deal.revenue)}千`} color={C.blue} />
+        <KPICard label="EBITDA（実態）" value={`¥${fmt(deal.ebitdaReal)}千`} color={C.gold} />
+        <KPICard label="NetCash" value={`¥${fmt(netCash)}千`} color={netCash >= 0 ? C.success : C.danger} />
+        <KPICard label="希望価格" value={`¥${fmt(deal.hopedPrice)}千`} color="#8b5cf6" />
+        <KPICard label="マルチプル" value={multiple(adjPrice, deal.ebitdaReal)} sub="Net調整後" color="#f97316" />
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", gap: 0, borderBottom: `2px solid ${C.border}`, marginBottom: 24 }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{ padding: "10px 20px", border: "none", background: "none", cursor: "pointer", fontWeight: 700, fontSize: 14, color: tab === t.id ? C.blue : C.textSm, borderBottom: tab === t.id ? `2px solid ${C.blue}` : "2px solid transparent", marginBottom: -2 }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "overview" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <div style={sty.card}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 14, color: C.textSm, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>基本情報</h3>
+            {[["診療科目", deal.specialty], ["所在地", deal.prefecture], ["理事長年齢", deal.doctorAge ? `${deal.doctorAge}歳` : "—"], ["常勤医師数", deal.fullTimeDoctors ? `${deal.fullTimeDoctors}名` : "—"], ["非常勤医師数", deal.partTimeDoctors ? `${deal.partTimeDoctors}名` : "—"], ["病床数", deal.beds || 0], ["拠点数", deal.clinics || 1], ["保険診療割合", pct(deal.insuranceRatio)], ["自由診療割合", pct(deal.selfPayRatio)]].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 13 }}>
+                <span style={{ color: C.textMd }}>{k}</span><span style={{ fontWeight: 600 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={sty.card}>
+              <h3 style={{ margin: "0 0 10px", fontSize: 14, color: C.textSm, fontWeight: 700 }}>後任医師情報</h3>
+              <p style={{ fontSize: 13, color: C.text, margin: 0 }}>{deal.successorInfo || "—"}</p>
+            </div>
+            <div style={sty.card}>
+              <h3 style={{ margin: "0 0 10px", fontSize: 14, color: C.textSm, fontWeight: 700 }}>競合情報</h3>
+              <p style={{ fontSize: 13, color: C.text, margin: 0 }}>{deal.competitorInfo || "—"}</p>
+            </div>
+            {isAdmin && (
+              <div style={sty.card}>
+                <h3 style={{ margin: "0 0 10px", fontSize: 14, color: C.textSm, fontWeight: 700 }}>Next Action</h3>
+                <input style={sty.input} value={nextAction} onChange={e => setNextAction(e.target.value)} placeholder="次のアクション" />
+                <h3 style={{ margin: "14px 0 10px", fontSize: 14, color: C.textSm, fontWeight: 700 }}>メモ</h3>
+                <textarea style={{ ...sty.input, height: 80, resize: "vertical" }} value={memo} onChange={e => setMemo(e.target.value)} />
+                <button style={{ ...sty.btn("primary", true), marginTop: 10 }} onClick={save}>保存</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === "financial" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <div style={sty.card}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 14, fontWeight: 700, color: C.textSm, textTransform: "uppercase", letterSpacing: 1 }}>損益情報（千円）</h3>
+            {[["売上高", deal.revenue], ["売上総利益", deal.grossProfit], ["営業利益", deal.operatingProfit], ["税前利益", deal.pretaxProfit], ["EBITDA", deal.ebitda], ["EBITDA（実態）", deal.ebitdaReal], ["役員報酬（総額）", deal.ownerSalary], ["減価償却費", deal.depreciation]].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 13 }}>
+                <span style={{ color: C.textMd }}>{k}</span>
+                <span style={{ fontWeight: 700, fontFamily: "monospace" }}>{v != null ? `¥${fmt(v)}` : "—"}</span>
+              </div>
+            ))}
+          </div>
+          <div style={sty.card}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 14, fontWeight: 700, color: C.textSm, textTransform: "uppercase", letterSpacing: 1 }}>バランスシート・対価（千円）</h3>
+            {[["総資産", deal.totalAssets], ["固定負債", deal.fixedLiabilities], ["純資産", deal.netAssets], ["現預金", deal.cash], ["有利子負債", deal.debt], ["NetCash / (Debt)", netCash], ["", null], ["希望価格", deal.hopedPrice], ["Net調整後価格", adjPrice], ["マルチプル(Net調整)", multiple(adjPrice, deal.ebitdaReal)]].map(([k, v]) => k ? (
+              <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 13 }}>
+                <span style={{ color: C.textMd }}>{k}</span>
+                <span style={{ fontWeight: 700, fontFamily: "monospace", color: k.includes("マルチプル") ? C.blue : undefined }}>{typeof v === "string" ? v : v != null ? `¥${fmt(v)}` : "—"}</span>
+              </div>
+            ) : <div key="sep" style={{ height: 8 }} />)}
+            {isAdmin && (
+              <div style={{ marginTop: 16, paddingTop: 16, borderTop: `2px solid ${C.border}` }}>
+                <h4 style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 700, color: C.gold }}>FD報酬（当社）</h4>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={sty.label}>FD業務委託報酬（千円）</label>
+                    <input style={sty.input} type="number" value={fdFee} onChange={e => setFdFee(e.target.value)} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={sty.label}>FD成功報酬（千円）</label>
+                    <input style={sty.input} type="number" value={successFee} onChange={e => setSuccessFee(e.target.value)} />
+                  </div>
+                </div>
+                <button style={{ ...sty.btn("gold", true), marginTop: 10 }} onClick={save}>保存</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === "patients" && (
+        <div style={sty.card}>
+          <h3 style={{ margin: "0 0 20px", fontSize: 14, fontWeight: 700, color: C.textSm, textTransform: "uppercase", letterSpacing: 1 }}>患者数推移（3年）</h3>
+          {deal.patients3y?.length > 0 ? (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+                  {["年度", "延べ患者数", "新規患者", "継続患者", "新規比率"].map(h => (
+                    <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 12, color: C.textSm, fontWeight: 700 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {deal.patients3y.map(row => (
+                  <tr key={row.year} style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <td style={{ padding: "10px 12px", fontWeight: 700 }}>{row.year}年</td>
+                    <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{fmt(row.total)}人</td>
+                    <td style={{ padding: "10px 12px", fontFamily: "monospace", color: C.success }}>{fmt(row.new)}人</td>
+                    <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{fmt(row.cont)}人</td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ height: 8, borderRadius: 4, background: C.border, flex: 1 }}>
+                          <div style={{ height: "100%", borderRadius: 4, background: C.success, width: `${((row.new / row.total) * 100).toFixed(0)}%` }} />
+                        </div>
+                        <span style={{ fontSize: 12 }}>{((row.new / row.total) * 100).toFixed(1)}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <p style={{ color: C.textSm }}>患者情報が登録されていません</p>}
+        </div>
+      )}
+
+      {tab === "files" && (
+        <div style={sty.card}>
+          <h3 style={{ margin: "0 0 16px", fontSize: 14, fontWeight: 700, color: C.textSm, textTransform: "uppercase", letterSpacing: 1 }}>アップロードファイル</h3>
+          {deal.files?.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {deal.files.map((f, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                  <span style={{ fontSize: 22 }}>{f.type === "IM" ? "📄" : f.type === "FS" ? "📊" : "📁"}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{f.name}</div>
+                    <div style={{ fontSize: 12, color: C.textSm }}><Tag label={f.type === "IM" ? "IM" : f.type === "FS" ? "財務諸表" : f.type === "TAX" ? "税務申告書" : f.type === "UKE" ? "UKEファイル" : f.type} color={f.type === "IM" ? C.blue : C.gold} /></div>
+                  </div>
+                  <button style={sty.btn("ghost", true)}>ダウンロード</button>
+                </div>
+              ))}
+            </div>
+          ) : <p style={{ color: C.textSm }}>ファイルが登録されていません</p>}
+        </div>
+      )}
+
+      {tab === "admin" && isAdmin && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <div style={sty.card}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 14, fontWeight: 700, color: C.textSm }}>管理情報</h3>
+            {[["紹介元", users?.find(u => u.id === deal.introducedBy)?.company || "—"], ["ステータス", deal.stage], ["登録日", deal.submittedAt], ["FD業務委託報酬", deal.fdFee ? `¥${fmt(deal.fdFee)}千` : "未設定"], ["FD成功報酬", deal.successFee ? `¥${fmt(deal.successFee)}千` : "未設定"]].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 13 }}>
+                <span style={{ color: C.textMd }}>{k}</span><span style={{ fontWeight: 600 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+          <div style={sty.card}>
+            <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700, color: C.textSm }}>メモ・状況</h3>
+            <textarea style={{ ...sty.input, height: 100, resize: "vertical", marginBottom: 10 }} value={memo} onChange={e => setMemo(e.target.value)} placeholder="内部メモ" />
+            <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700, color: C.textSm }}>Next Action</h3>
+            <input style={sty.input} value={nextAction} onChange={e => setNextAction(e.target.value)} placeholder="次のアクション" />
+            <button style={{ ...sty.btn("primary", true), marginTop: 12 }} onClick={save}>保存</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// DEAL FORM (New Deal Registration)
+// ============================================================
+function DealForm({ onSubmit }) {
+  const [step, setStep] = useState(1);
+  const [form, setForm] = useState({
+    companyName: "", specialty: "", prefecture: "", doctorAge: "", fullTimeDoctors: "", partTimeDoctors: "",
+    beds: "", clinics: "1", insuranceRatio: "", selfPayRatio: "",
+    revenue: "", operatingProfit: "", ebitda: "", ebitdaReal: "", ownerSalary: "", depreciation: "",
+    cash: "", debt: "", hopedPrice: "", totalAssets: "", netAssets: "",
+    successorInfo: "", competitorInfo: "", memo: "",
+    patients3y: [
+      { year: new Date().getFullYear() - 3, total: "", new: "", cont: "" },
+      { year: new Date().getFullYear() - 2, total: "", new: "", cont: "" },
+      { year: new Date().getFullYear() - 1, total: "", new: "", cont: "" },
+    ],
+    files: [],
+  });
+  const [fileInputs, setFileInputs] = useState([]);
+  const fileRef = useRef();
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const num = v => v === "" ? null : Number(v);
+
+  const handleSubmit = () => {
+    if (!form.companyName || !form.specialty || !form.prefecture || !form.revenue) {
+      alert("必須項目（法人名・診療科・都道府県・売上高）を入力してください"); return;
+    }
+    const fakeFiles = fileInputs.map(f => ({ name: f.name, type: f.name.toLowerCase().includes("im") ? "IM" : f.name.toLowerCase().includes("税") || f.name.toLowerCase().includes("tax") ? "TAX" : f.name.toLowerCase().includes("uke") ? "UKE" : "FS" }));
+    onSubmit({
+      ...form, id: `d${Date.now()}`,
+      revenue: num(form.revenue), operatingProfit: num(form.operatingProfit),
+      ebitda: num(form.ebitda), ebitdaReal: num(form.ebitdaReal),
+      ownerSalary: num(form.ownerSalary), depreciation: num(form.depreciation),
+      cash: num(form.cash), debt: num(form.debt), hopedPrice: num(form.hopedPrice),
+      totalAssets: num(form.totalAssets), netAssets: num(form.netAssets),
+      doctorAge: num(form.doctorAge), fullTimeDoctors: num(form.fullTimeDoctors), partTimeDoctors: num(form.partTimeDoctors),
+      beds: num(form.beds), clinics: num(form.clinics) || 1,
+      insuranceRatio: num(form.insuranceRatio), selfPayRatio: num(form.selfPayRatio),
+      patients3y: form.patients3y.map(p => ({ year: p.year, total: num(p.total), new: num(p.new), cont: num(p.cont) })).filter(p => p.total),
+      files: fakeFiles,
+    });
+  };
+
+  const Field = ({ label, k, type = "text", required, placeholder }) => (
+    <div style={{ marginBottom: 14 }}>
+      <label style={sty.label}>{label}{required && <span style={{ color: C.danger }}> *</span>}</label>
+      <input style={sty.input} type={type} placeholder={placeholder} value={form[k]} onChange={e => set(k, e.target.value)} />
+    </div>
+  );
+
+  const steps = ["基本情報", "財務情報", "患者・競合情報", "ファイルアップロード"];
+
+  return (
+    <div style={{ maxWidth: 780 }}>
+      <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 6 }}>新規案件登録</h1>
+      <p style={{ color: C.textSm, fontSize: 14, marginBottom: 24 }}>必須項目（*）を必ずご入力ください</p>
+
+      {/* Step indicator */}
+      <div style={{ display: "flex", gap: 0, marginBottom: 32 }}>
+        {steps.map((s, i) => (
+          <div key={i} style={{ flex: 1, display: "flex", alignItems: "center" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1 }}>
+              <div style={{ width: 32, height: 32, borderRadius: "50%", background: step > i + 1 ? C.success : step === i + 1 ? C.blue : C.border, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, transition: "all 0.2s" }}>
+                {step > i + 1 ? "✓" : i + 1}
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: step === i + 1 ? C.blue : C.textSm, textAlign: "center" }}>{s}</div>
+            </div>
+            {i < steps.length - 1 && <div style={{ height: 2, flex: 1, background: step > i + 1 ? C.success : C.border, marginBottom: 22 }} />}
+          </div>
+        ))}
+      </div>
+
+      <div style={sty.card}>
+        {step === 1 && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 20px" }}>
+            <Field label="医療法人名" k="companyName" required placeholder="医療法人○○会" />
+            <div style={{ marginBottom: 14 }}>
+              <label style={sty.label}>診療科目 <span style={{ color: C.danger }}>*</span></label>
+              <select style={sty.input} value={form.specialty} onChange={e => set("specialty", e.target.value)}>
+                <option value="">選択してください</option>
+                {SPECIALTIES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={sty.label}>都道府県 <span style={{ color: C.danger }}>*</span></label>
+              <select style={sty.input} value={form.prefecture} onChange={e => set("prefecture", e.target.value)}>
+                <option value="">選択してください</option>
+                {PREFS.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <Field label="理事長年齢" k="doctorAge" type="number" placeholder="例: 63" />
+            <Field label="常勤医師数" k="fullTimeDoctors" type="number" placeholder="例: 3" />
+            <Field label="非常勤医師数" k="partTimeDoctors" type="number" placeholder="例: 2" />
+            <Field label="病床数（有床の場合）" k="beds" type="number" placeholder="例: 19（無床: 0）" />
+            <Field label="拠点数" k="clinics" type="number" placeholder="例: 1" />
+            <Field label="保険診療割合（%）" k="insuranceRatio" type="number" placeholder="例: 90" />
+            <Field label="自由診療割合（%）" k="selfPayRatio" type="number" placeholder="例: 10" />
+          </div>
+        )}
+
+        {step === 2 && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 20px" }}>
+            <Field label="売上高（千円）" k="revenue" type="number" required placeholder="例: 320000" />
+            <Field label="営業利益（千円）" k="operatingProfit" type="number" placeholder="例: 28000" />
+            <Field label="EBITDA（千円）" k="ebitda" type="number" placeholder="例: 52000" />
+            <Field label="EBITDA実態（オーナーズコスト調整後、千円）" k="ebitdaReal" type="number" placeholder="例: 61000" />
+            <Field label="役員報酬総額（千円）" k="ownerSalary" type="number" placeholder="例: 24000" />
+            <Field label="減価償却費（千円）" k="depreciation" type="number" placeholder="例: 8000" />
+            <Field label="現預金・現金同等物（千円）" k="cash" type="number" placeholder="例: 18500" />
+            <Field label="有利子負債（千円）" k="debt" type="number" placeholder="例: 42000" />
+            <Field label="総資産（千円）" k="totalAssets" type="number" placeholder="例: 150000" />
+            <Field label="純資産（千円）" k="netAssets" type="number" placeholder="例: 60000" />
+            <Field label="希望譲渡価格（千円）" k="hopedPrice" type="number" placeholder="例: 200000" />
+          </div>
+        )}
+
+        {step === 3 && (
+          <>
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14, color: C.textMd }}>患者数推移（3年分）</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+                    {["年度", "延べ患者数", "新規患者数", "継続患者数"].map(h => (
+                      <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 12, color: C.textSm, fontWeight: 700 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {form.patients3y.map((row, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                      <td style={{ padding: "8px 10px", fontWeight: 700 }}>{row.year}年</td>
+                      {["total", "new", "cont"].map(k => (
+                        <td key={k} style={{ padding: "8px 10px" }}>
+                          <input style={{ ...sty.input, width: 120 }} type="number" value={row[k]} onChange={e => {
+                            const p = [...form.patients3y]; p[i] = { ...p[i], [k]: e.target.value }; set("patients3y", p);
+                          }} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+              <div>
+                <label style={sty.label}>後任医師情報</label>
+                <textarea style={{ ...sty.input, height: 80 }} value={form.successorInfo} onChange={e => set("successorInfo", e.target.value)} placeholder="後任医師の候補状況など" />
+              </div>
+              <div>
+                <label style={sty.label}>競合情報</label>
+                <textarea style={{ ...sty.input, height: 80 }} value={form.competitorInfo} onChange={e => set("competitorInfo", e.target.value)} placeholder="商圏内の競合施設情報など" />
+              </div>
+              <div style={{ gridColumn: "1/-1" }}>
+                <label style={sty.label}>補足・備考</label>
+                <textarea style={{ ...sty.input, height: 70 }} value={form.memo} onChange={e => set("memo", e.target.value)} placeholder="その他特記事項" />
+              </div>
             </div>
           </>
         )}
-      </div>
-    </div>
-  )
-}
 
-function GekirakuMenu({ users, tickets, selectedUserId, onSelectUser, onOrder }) {
-  const selectedUser = users.find(u => u.id === selectedUserId)
-  const [showTicketModal, setShowTicketModal] = useState(false)
-  const isMobile = window.innerWidth < 768
-  return (
-    <>
-    {showTicketModal && <TicketPurchaseModal onClose={() => setShowTicketModal(false)} />}
-    <div style={{ maxWidth: 860, margin: '0 auto', padding: isMobile ? '16px' : '40px 32px', fontFamily: FONT }}>
-      <div style={{ marginBottom: 32, paddingBottom: 20, borderBottom: '2px solid ' + C.navy }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.gold, letterSpacing: '0.1em', marginBottom: 6 }}>GEKIRAKU IM</div>
-        <div style={{ fontSize: 28, fontWeight: 700, color: C.navy, letterSpacing: '-0.03em' }}>IM作成支援</div>
-        <div style={{ fontSize: 14, color: C.textMuted, marginTop: 8, lineHeight: 1.7 }}>SynapseDealチームにIM（案件概要書）の作成を支援します。<br/>担当者を選択して依頼ボタンを押してください。</div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20, marginBottom: 32 }}>
-        <div style={{ background: 'linear-gradient(135deg, ' + C.navy + ' 0%, #2D4160 100%)', borderRadius: 12, padding: '32px 28px', boxShadow: '0 4px 20px rgba(27,43,75,0.18)' }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.gold, letterSpacing: '0.08em', marginBottom: 12 }}>🎫 チケット残数</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
-            <span style={{ fontSize: 64, fontWeight: 800, color: tickets > 0 ? C.cream : '#FF6B6B', lineHeight: 1, fontFamily: 'monospace' }}>{tickets}</span>
-            <span style={{ fontSize: 20, color: '#A8B8C8', fontWeight: 400 }}>枚</span>
-          </div>
-          <div style={{ height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, marginBottom: 12 }}>
-            <div style={{ height: '100%', width: Math.min(tickets * 20, 100) + '%', background: tickets > 0 ? C.gold : '#FF6B6B', borderRadius: 2, transition: 'width 0.5s' }} />
-          </div>
-          {tickets === 0
-            ? <div style={{ fontSize: 12, color: '#FF9999', fontWeight: 600 }}>⚠ チケット残数なし</div>
-            : <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>あと {tickets} 回IM作成できます</div>
-          }
-          <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-            <button onClick={() => setShowTicketModal(true)} style={{ width: '100%', padding: '8px 0', background: C.gold, border: 'none', borderRadius: 6, color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>🎫 チケット購入はこちら</button>
-          </div>
-        </div>
-
-        <div style={{ background: C.bgCard, border: '2px solid ' + C.border, borderRadius: 12, padding: '28px 32px' }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.navy, marginBottom: 16 }}>👤 担当アドバイザーを選択</div>
-          {users.length === 0 ? (
-            <div style={{ fontSize: 13, color: C.danger, background: C.dangerBg, padding: '12px 16px', borderRadius: 8, border: '1px solid #E8C0C0', display: 'flex', alignItems: 'center', gap: 8 }}>
-              ⚠ 設定タブでユーザーを登録してください
+        {step === 4 && (
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              {[
+                { type: "IM", label: "案件概要書（IM）", required: true, icon: "📄", desc: "必須" },
+                { type: "FS", label: "財務諸表（3期分）", required: true, icon: "📊", desc: "必須" },
+                { type: "TAX", label: "税務申告書（3期分）", required: true, icon: "🧾", desc: "必須" },
+                { type: "UKE", label: "UKEファイル", required: false, icon: "📁", desc: "任意" },
+              ].map(item => {
+                const uploaded = fileInputs.filter(f => {
+                  const n = f.name.toLowerCase();
+                  if (item.type === "IM") return n.includes("im") || n.includes("概要");
+                  if (item.type === "FS") return n.includes("財務") || n.includes("決算");
+                  if (item.type === "TAX") return n.includes("税務") || n.includes("申告");
+                  if (item.type === "UKE") return n.includes("uke");
+                  return false;
+                });
+                return (
+                  <div key={item.type} style={{ border: `2px dashed ${uploaded.length > 0 ? C.success : C.border}`, borderRadius: 12, padding: "20px", textAlign: "center", background: uploaded.length > 0 ? "#f0fdf4" : C.bg }}>
+                    <div style={{ fontSize: 32, marginBottom: 8 }}>{uploaded.length > 0 ? "✅" : item.icon}</div>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{item.label}</div>
+                    <div style={{ fontSize: 12, color: item.required ? C.danger : C.textSm, marginBottom: 12 }}>{item.desc}</div>
+                    {uploaded.length > 0 ? (
+                      <div style={{ fontSize: 12, color: C.success, fontWeight: 600 }}>{uploaded.map(f => f.name).join(", ")}</div>
+                    ) : (
+                      <label style={{ cursor: "pointer" }}>
+                        <input type="file" style={{ display: "none" }} multiple onChange={e => setFileInputs(prev => [...prev, ...Array.from(e.target.files)])} />
+                        <span style={sty.btn("ghost", true)}>ファイルを選択</span>
+                      </label>
+                    )}
+                  </div>
+                );
+              })}
             </div>
+            {fileInputs.length > 0 && (
+              <div style={{ marginTop: 20, padding: "14px", background: C.bg, borderRadius: 8 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>アップロード予定ファイル</div>
+                {fileInputs.map((f, i) => (
+                  <div key={i} style={{ fontSize: 13, padding: "4px 0", color: C.textMd }}>📎 {f.name}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 24, paddingTop: 20, borderTop: `1px solid ${C.border}` }}>
+          <button style={step === 1 ? { visibility: "hidden" } : sty.btn("ghost")} onClick={() => setStep(s => s - 1)}>← 前へ</button>
+          {step < 4 ? (
+            <button style={sty.btn("primary")} onClick={() => setStep(s => s + 1)}>次へ →</button>
           ) : (
-            <select style={{ ...inp, fontSize: 14, padding: '10px 14px', borderRadius: 8, borderColor: selectedUserId ? C.navy : C.border, borderWidth: 2 }} value={selectedUserId} onChange={e => onSelectUser(e.target.value)}>
-              <option value="">━━ 担当者を選択してください ━━</option>
-              {users.map(u => <option key={u.id} value={u.id}>{u.name}（{u.email}）</option>)}
-            </select>
-          )}
-          {selectedUser && (
-            <div style={{ marginTop: 14, padding: '12px 16px', background: C.successBg, border: '1px solid #B0D8BC', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ width: 36, height: 36, borderRadius: '50%', background: C.navy, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.cream, fontSize: 16, fontWeight: 700, flexShrink: 0 }}>
-                {selectedUser.name.charAt(0)}
-              </div>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.navy }}>{selectedUser.name}</div>
-                <div style={{ fontSize: 12, color: C.textMuted }}>{selectedUser.email} · {selectedUser.role === 'admin' ? '管理者' : 'アドバイザー'}</div>
-              </div>
-            </div>
+            <button style={sty.btn("gold")} onClick={handleSubmit}>✅ 案件を送信する</button>
           )}
         </div>
       </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <button onClick={onOrder} disabled={!selectedUserId || tickets === 0}
-          style={{ ...btn.primary, padding: '14px 48px', fontSize: 15, fontWeight: 700, borderRadius: 8, opacity: (!selectedUserId || tickets === 0) ? 0.4 : 1, cursor: (!selectedUserId || tickets === 0) ? 'not-allowed' : 'pointer', boxShadow: selectedUserId && tickets > 0 ? '0 4px 14px rgba(27,43,75,0.25)' : 'none', transition: 'all 0.2s' }}>
-          📋 IM作成を依頼する
-        </button>
-        {!selectedUserId && <div style={{ fontSize: 13, color: C.textMuted }}>← 担当者を選択してください</div>}
-        {selectedUserId && tickets === 0 && <div style={{ fontSize: 13, color: C.danger, fontWeight: 600 }}>← チケットが不足しています</div>}
-      </div>
     </div>
-    </>
-  )
+  );
 }
 
-function GekirakuOrder({ selectedUser, imFormatFile, onComplete, onBack }) {
-  const isMobile = window.innerWidth < 768
-  const [step, setStep] = useState(0)
-  const [imFiles, setImFiles] = useState({})
-  const [imShared, setImShared] = useState({})
-  const [dealName, setDealName] = useState('')
-  const [companyName, setCompanyName] = useState('')
-  const [industry, setIndustry] = useState('')
-  const [scheme, setScheme] = useState('株式譲渡')
-  const [fiscalYearEnd, setFiscalYearEnd] = useState('')
-  const [specialNotes, setSpecialNotes] = useState('')
-  const [showConfirm, setShowConfirm] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [done, setDone] = useState(false)
+// ============================================================
+// NEWSLETTER FILTER（メルマガ自動抽出・要件設定）
+// ============================================================
 
-  const [driveUploading, setDriveUploading] = useState({})
-  const [driveUploaded, setDriveUploaded] = useState({})
+// サンプルメルマガ本文（デモ用）
+const SAMPLE_NEWSLETTER = `【医療法人承継案件メルマガ Vol.47】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+本日は7件の案件情報をお届けします。
+ご関心の案件がございましたらお問い合わせください。
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  async function handleFiles(key, newFiles) {
-    setImFiles(prev => ({ ...prev, [key]: [...(prev[key] || []), ...newFiles] }))
-    if (newFiles.length === 0) return
-    setDriveUploading(prev => ({ ...prev, [key]: true }))
+【案件①】内科クリニック（東京都）
+診療科：内科・消化器内科
+所在地：東京都豊島区
+売上高：約3.1億円
+EBITDA（実態）：約5,800万円
+EV/EBITDA：3.2x
+理事長年齢：69歳
+病床数：無床
+希望価格：約1.85億円
+備考：後継者なし。駅徒歩3分の好立地。
+
+【案件②】整形外科クリニック（神奈川県）
+診療科：整形外科・リハビリテーション科
+所在地：神奈川県川崎市
+売上高：約4.8億円
+EBITDA（実態）：約9,200万円
+EV/EBITDA：3.8x
+理事長年齢：63歳
+病床数：無床
+希望価格：約3.5億円
+備考：リハビリ室完備。スタッフ定着率高。
+
+【案件③】精神科病院（北海道）
+診療科：精神科
+所在地：北海道札幌市
+売上高：約12億円
+EBITDA（実態）：約1.5億円
+EV/EBITDA：6.2x
+理事長年齢：71歳
+病床数：150床
+希望価格：約9.3億円
+備考：大型病院。経営改善余地あり。
+
+【案件④】眼科クリニック（大阪府）
+診療科：眼科
+所在地：大阪府大阪市
+売上高：約2.2億円
+EBITDA（実態）：約4,500万円
+EV/EBITDA：2.7x
+理事長年齢：62歳
+病床数：無床
+希望価格：約1.2億円
+備考：白内障手術実績豊富。自由診療あり。
+
+【案件⑤】皮膚科クリニック（福岡県）
+診療科：皮膚科・美容皮膚科
+所在地：福岡県福岡市
+売上高：約1.8億円
+EBITDA（実態）：約3,800万円
+EV/EBITDA：4.9x
+理事長年齢：55歳
+病床数：無床
+希望価格：約1.86億円
+備考：自由診療30%。若い患者層。マルチプルやや高め。
+
+【案件⑥】産婦人科クリニック（愛知県）
+診療科：産婦人科・婦人科
+所在地：愛知県名古屋市
+売上高：約5.6億円
+EBITDA（実態）：約1.1億円
+EV/EBITDA：3.1x
+理事長年齢：66歳
+病床数：有床19床
+希望価格：約3.4億円
+備考：分娩件数年間400件超。地域シェア高。
+
+【案件⑦】歯科クリニック（埼玉県）
+診療科：歯科・矯正歯科
+所在地：埼玉県さいたま市
+売上高：約0.9億円
+EBITDA（実態）：約1,800万円
+EV/EBITDA：3.3x
+理事長年齢：58歳
+病床数：無床
+希望価格：約0.6億円
+備考：矯正専門医在籍。インビザライン取扱。売上規模小。
+`;
+
+function checkCriteria(deal, criteria) {
+  const reasons = [];
+  const passed = [];
+
+  if (criteria.specialties.length > 0 && !criteria.specialties.some(s => (deal.specialty || "").includes(s))) {
+    reasons.push(`診療科（${deal.specialty}）が対象外`);
+  } else { passed.push("診療科 ✓"); }
+
+  if (criteria.prefectures.length > 0 && !criteria.prefectures.some(p => (deal.prefecture || "").includes(p))) {
+    reasons.push(`エリア（${deal.prefecture}）が対象外`);
+  } else { passed.push("エリア ✓"); }
+
+  const mult = deal.hopedPrice && deal.ebitdaReal ? deal.hopedPrice / deal.ebitdaReal : null;
+  if (mult && mult > criteria.maxMultiple) {
+    reasons.push(`マルチプル ${mult.toFixed(1)}x > 上限${criteria.maxMultiple}x`);
+  } else if (mult) { passed.push(`マルチプル ${mult.toFixed(1)}x ✓`); }
+
+  if (deal.revenue && deal.revenue < criteria.minRevenue) {
+    reasons.push(`売上 ¥${fmt(deal.revenue)}千 < 下限¥${fmt(criteria.minRevenue)}千`);
+  } else if (deal.revenue) { passed.push("売上規模 ✓"); }
+
+  if (deal.ebitdaReal && deal.ebitdaReal < criteria.minEbitda) {
+    reasons.push(`EBITDA ¥${fmt(deal.ebitdaReal)}千 < 下限¥${fmt(criteria.minEbitda)}千`);
+  } else if (deal.ebitdaReal) { passed.push("EBITDA ✓"); }
+
+  if (deal.doctorAge && deal.doctorAge > criteria.maxDoctorAge) {
+    reasons.push(`理事長年齢 ${deal.doctorAge}歳 > 上限${criteria.maxDoctorAge}歳`);
+  } else if (deal.doctorAge) { passed.push("年齢 ✓"); }
+
+  return { ok: reasons.length === 0, reasons, passed };
+}
+
+function parseNewsletterText(text, criteria) {
+  const blocks = text.split(/【案件[①②③④⑤⑥⑦⑧⑨⑩\d]+】/).filter(b => b.trim().length > 50);
+
+  return blocks.map((block, i) => {
+    const get = (patterns) => {
+      for (const p of patterns) {
+        const m = block.match(p);
+        if (m) return m[1].trim();
+      }
+      return null;
+    };
+    const getNum = (patterns) => {
+      const v = get(patterns);
+      if (!v) return null;
+      const n = v.replace(/[^0-9.]/g, "");
+      if (!n) return null;
+      const num = parseFloat(n);
+      if (v.includes("億")) return Math.round(num * 100000);
+      if (v.includes("万")) return Math.round(num * 1000);
+      return Math.round(num * 1000);
+    };
+
+    const specialty = get([/診療科[目：:]\s*([^\n]+)/, /診療科\s*([^\n]+)/])?.split("・")[0] || "その他";
+    const prefRaw = get([/所在地[：:]\s*([^\n]+)/, /エリア[：:]\s*([^\n]+)/]) || "";
+    const prefecture = PREFS.find(p => prefRaw.includes(p)) || prefRaw.slice(0, 3);
+    const revenue = getNum([/売上高[：:]\s*約?([\d.]+[億万]円?)/, /売上[：:]\s*約?([\d.]+[億万]円?)/]);
+    const ebitdaReal = getNum([/EBITDA（実態）[：:]\s*約?([\d.]+[億万]円?)/, /EBITDA\（実態\）[：:]\s*約?([\d.]+[億万]円?)/]);
+    const multRaw = get([/EV\/EBITDA[：:]\s*([\d.]+)x/, /マルチプル[：:]\s*([\d.]+)x/]);
+    const mult = multRaw ? parseFloat(multRaw) : null;
+    const hopedPrice = ebitdaReal && mult ? Math.round(ebitdaReal * mult) : getNum([/希望価格[：:]\s*約?([\d.]+[億万]円?)/]);
+    const doctorAge = parseInt(get([/理事長年齢[：:]\s*(\d+)歳/]) || "0") || null;
+    const bedsRaw = get([/病床数[：:]\s*([^\n]+)/]) || "";
+    const beds = bedsRaw.includes("無床") ? 0 : parseInt(bedsRaw.replace(/[^0-9]/g, "")) || 0;
+    const memo = get([/備考[：:]\s*([^\n]+)/]) || "";
+
+    const deal = {
+      id: `nl_${Date.now()}_${i}`,
+      companyName: `（ノンネーム）${specialty}クリニック ${prefecture}`,
+      specialty, prefecture, revenue, ebitdaReal, hopedPrice, doctorAge, beds,
+      clinics: 1, memo, stage: "情報収集中", status: "pending", source: "newsletter",
+      submittedAt: new Date().toISOString().slice(0, 10),
+      introducedByEmail: "newsletter@source.jp", files: [], patients3y: [],
+      nextAction: "初回ヒアリング", fdFee: null, successFee: null,
+    };
+    const check = checkCriteria(deal, criteria);
+    return { ...deal, _check: check };
+  });
+}
+
+function NewsletterFilter({ onBulkAdd }) {
+  const [criteria, setCriteria] = useState(DEFAULT_FILTER_CRITERIA);
+  const [text, setText] = useState("");
+  const [parsed, setParsed] = useState(null);
+  const [tab, setTab] = useState("settings"); // settings | parse
+
+  const runParse = () => {
+    const results = parseNewsletterText(text || SAMPLE_NEWSLETTER, criteria);
+    setParsed(results);
+    setTab("parse");
+  };
+
+  const passedDeals = parsed?.filter(d => d._check.ok) || [];
+  const failedDeals = parsed?.filter(d => !d._check.ok) || [];
+
+  const C2 = (k, v) => setCriteria(c => ({ ...c, [k]: v }));
+  const toggleArr = (k, v) => setCriteria(c => ({
+    ...c, [k]: c[k].includes(v) ? c[k].filter(x => x !== v) : [...c[k], v]
+  }));
+
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>メルマガ案件フィルタ</h1>
+        <p style={{ color: C.textSm, fontSize: 14, margin: "4px 0 0" }}>案件メルマガを貼り付けると自社要件に合致した案件を自動抽出します</p>
+      </div>
+
+      <div style={{ display: "flex", gap: 0, borderBottom: `2px solid ${C.border}`, marginBottom: 24 }}>
+        {[{ id: "settings", label: "⚙️ 要件設定" }, { id: "parse", label: "📨 メルマガ解析" }].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{ padding: "10px 24px", border: "none", background: "none", cursor: "pointer", fontWeight: 700, fontSize: 14, color: tab === t.id ? C.blue : C.textSm, borderBottom: tab === t.id ? `2px solid ${C.blue}` : "2px solid transparent", marginBottom: -2 }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "settings" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <div style={sty.card}>
+            <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: C.textSm }}>対象診療科</h3>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {SPECIALTIES.map(s => (
+                <button key={s} onClick={() => toggleArr("specialties", s)} style={{ padding: "6px 12px", borderRadius: 20, border: `1.5px solid ${criteria.specialties.includes(s) ? C.blue : C.border}`, background: criteria.specialties.includes(s) ? C.blueLt : C.white, color: criteria.specialties.includes(s) ? C.blue : C.textMd, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={sty.card}>
+            <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: C.textSm }}>対象エリア（都道府県）</h3>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 200, overflowY: "auto" }}>
+              {PREFS.map(p => (
+                <button key={p} onClick={() => toggleArr("prefectures", p)} style={{ padding: "4px 10px", borderRadius: 16, border: `1.5px solid ${criteria.prefectures.includes(p) ? C.blue : C.border}`, background: criteria.prefectures.includes(p) ? C.blueLt : C.white, color: criteria.prefectures.includes(p) ? C.blue : C.textMd, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={sty.card}>
+            <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: C.textSm }}>財務・価格条件</h3>
+            {[
+              { label: "マルチプル上限", k: "maxMultiple", unit: "x", step: "0.1" },
+              { label: "売上高下限（千円）", k: "minRevenue", unit: "千円", step: "10000" },
+              { label: "EBITDA実態下限（千円）", k: "minEbitda", unit: "千円", step: "5000" },
+            ].map(({ label, k, unit, step }) => (
+              <div key={k} style={{ marginBottom: 14 }}>
+                <label style={sty.label}>{label}</label>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input style={{ ...sty.input, width: 160 }} type="number" step={step} value={criteria[k]} onChange={e => C2(k, parseFloat(e.target.value))} />
+                  <span style={{ fontSize: 13, color: C.textSm }}>{unit}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={sty.card}>
+            <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: C.textSm }}>その他条件</h3>
+            <div style={{ marginBottom: 14 }}>
+              <label style={sty.label}>理事長年齢上限</label>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input style={{ ...sty.input, width: 100 }} type="number" value={criteria.maxDoctorAge} onChange={e => C2("maxDoctorAge", parseInt(e.target.value))} />
+                <span style={{ fontSize: 13, color: C.textSm }}>歳以下</span>
+              </div>
+            </div>
+            <div style={{ marginTop: 20, padding: "12px", background: C.blueLt, borderRadius: 8, fontSize: 13, color: C.blue }}>
+              <strong>現在の要件サマリー</strong><br />
+              診療科: {criteria.specialties.length}科目<br />
+              エリア: {criteria.prefectures.length}都道府県<br />
+              マルチプル: {criteria.maxMultiple}x以下<br />
+              売上: ¥{fmt(criteria.minRevenue)}千以上
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "settings" && (
+        <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end" }}>
+          <button style={sty.btn("primary")} onClick={() => setTab("parse")}>メルマガ解析へ →</button>
+        </div>
+      )}
+
+      {tab === "parse" && (
+        <div>
+          <div style={sty.card}>
+            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>メルマガ本文を貼り付け</div>
+            <textarea
+              style={{ ...sty.input, height: 200, resize: "vertical", fontFamily: "monospace", fontSize: 12 }}
+              placeholder="メルマガ本文をここに貼り付けてください..."
+              value={text}
+              onChange={e => setText(e.target.value)}
+            />
+            <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+              <button style={sty.btn("ghost", true)} onClick={() => { setText(SAMPLE_NEWSLETTER); }}>サンプルを使用</button>
+              <button style={sty.btn("primary")} onClick={runParse}>🔍 解析実行</button>
+            </div>
+          </div>
+
+          {parsed && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{ display: "flex", gap: 16, marginBottom: 20 }}>
+                <div style={{ ...sty.card, marginBottom: 0, flex: 1, borderTop: `3px solid ${C.success}`, textAlign: "center" }}>
+                  <div style={{ fontSize: 11, color: C.textSm, fontWeight: 700, marginBottom: 4 }}>要件通過</div>
+                  <div style={{ fontSize: 32, fontWeight: 900, color: C.success }}>{passedDeals.length}</div>
+                  <div style={{ fontSize: 12, color: C.textSm }}>件 / {parsed.length}件中</div>
+                </div>
+                <div style={{ ...sty.card, marginBottom: 0, flex: 1, borderTop: `3px solid ${C.danger}`, textAlign: "center" }}>
+                  <div style={{ fontSize: 11, color: C.textSm, fontWeight: 700, marginBottom: 4 }}>要件不適合</div>
+                  <div style={{ fontSize: 32, fontWeight: 900, color: C.danger }}>{failedDeals.length}</div>
+                  <div style={{ fontSize: 12, color: C.textSm }}>件（自動除外）</div>
+                </div>
+              </div>
+
+              {passedDeals.length > 0 && (
+                <div style={sty.card}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: C.success }}>✅ 要件通過案件（仮登録対象）</div>
+                    <button style={sty.btn("primary")} onClick={() => onBulkAdd(passedDeals.map(({ _check, ...d }) => d))}>
+                      {passedDeals.length}件を仮登録
+                    </button>
+                  </div>
+                  {passedDeals.map(d => (
+                    <div key={d.id} style={{ padding: "12px 0", borderBottom: `1px solid ${C.border}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 14 }}>{d.companyName}</div>
+                          <div style={{ fontSize: 12, color: C.textSm, marginTop: 2 }}>{d.specialty} / {d.prefecture} / 理事長{d.doctorAge}歳</div>
+                          <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                            {d._check.passed.map(p => <span key={p} style={sty.badge(C.success)}>{p}</span>)}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: "right", fontSize: 13 }}>
+                          <div style={{ fontFamily: "monospace" }}>売上 ¥{fmt(d.revenue)}千</div>
+                          <div style={{ fontFamily: "monospace", fontWeight: 700 }}>EBITDA ¥{fmt(d.ebitdaReal)}千</div>
+                          <div style={{ fontWeight: 800, color: C.blue, fontSize: 15 }}>{multiple(d.hopedPrice, d.ebitdaReal)}</div>
+                        </div>
+                      </div>
+                      {d.memo && <div style={{ fontSize: 12, color: C.textMd, marginTop: 6 }}>📝 {d.memo}</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {failedDeals.length > 0 && (
+                <div style={{ ...sty.card, marginTop: 16, opacity: 0.7 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: C.danger, marginBottom: 12 }}>✕ 要件不適合（除外）</div>
+                  {failedDeals.map(d => (
+                    <div key={d.id} style={{ padding: "10px 0", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>{d.companyName}</div>
+                        <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                          {d._check.reasons.map(r => <span key={r} style={sty.badge(C.danger)}>{r}</span>)}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, color: C.textSm, textAlign: "right" }}>
+                        {multiple(d.hopedPrice, d.ebitdaReal)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// EXCEL IMPORT
+// ============================================================
+
+// Column mapping: Excelヘッダー → アプリフィールド
+const SHEET1_MAP = {
+  "案件名称": "companyName",
+  "都道": "prefecture",
+  "診療科目": "specialty",
+  "ステータス": "stage",
+  "Next\nAction": "nextAction",
+  "状況要約": "memo",
+  "紹介元": "introducedByName",
+  "仲介担当者": "intermediaryContact",
+  "FD業務委託報酬\n（千円, stock）": "fdFee",
+  "FD成功報酬\n（千円, flow）": "successFee",
+  "EV/EBITDA(売手希望・売手認識)": "multipleAsked",
+  "EV/EBITDA(試算時)": "multipleCalc",
+  "年間収益(億円)": "revenueOku",
+  "年間実態EBITDA(億円)": "ebitdaOku",
+  "クロージング予定日": "closingDate",
+  "紹介日": "submittedAt",
+  "医師採用状況": "successorInfo",
+};
+
+const SHEET6_MAP = {
+  "案件名称": "companyName",
+  "所在\n都道府県": "prefecture",
+  "メイン診療科": "specialty",
+  "売上高": "revenue",
+  "売上総利益": "grossProfit",
+  "営業利益": "operatingProfit",
+  "減価償却費": "depreciation",
+  "税前利益": "pretaxProfit",
+  "役員報酬（総額）": "ownerSalary",
+  "EBITDA": "ebitda",
+  "EBITDA（実態）": "ebitdaReal",
+  "NetCash(千円)": "netCashRaw",
+  "希望金額": "hopedPrice",
+  "総資産": "totalAssets",
+  "固定負債": "fixedLiabilities",
+  "純資産": "netAssets",
+  "病床規模": "beds",
+  "理事長年齢": "doctorAge",
+  "拠点数": "clinics",
+  "常勤医師数": "fullTimeDoctors",
+  "非常勤医師数": "partTimeDoctors",
+  "検討終了背景": "closingReason",
+  "備考": "notes",
+};
+
+// ステージ名の正規化
+const normalizeStage = (s) => {
+  if (!s) return "情報収集中";
+  const map = {
+    "NDA": "NDA締結", "TOP": "TOP面談", "LOI": "LOI提出",
+    "MOU": "MOU締結", "DA": "DA締結", "CL": "クロージング",
+    "クロージング": "クロージング", "終了": "検討終了", "検討終了": "検討終了",
+  };
+  for (const [k, v] of Object.entries(map)) { if (String(s).includes(k)) return v; }
+  return STAGES.includes(s) ? s : "情報収集中";
+};
+
+function parseSheet(ws, mapping) {
+  const rows = XLSX.utils.sheet_to_json(ws, { defval: null, raw: false });
+  return rows.map(row => {
+    const out = {};
+    for (const [xlsCol, appField] of Object.entries(mapping)) {
+      // ヘッダーの改行・スペースを正規化してマッチ
+      const val = row[xlsCol] ?? row[xlsCol.replace(/\n/g, " ")] ?? row[xlsCol.replace(/\n/g, "")] ?? null;
+      out[appField] = val;
+    }
+    return out;
+  }).filter(r => r.companyName);
+}
+
+function mergeRows(sheet1Rows, sheet6Rows) {
+  const map6 = {};
+  sheet6Rows.forEach(r => { if (r.companyName) map6[r.companyName] = r; });
+
+  return sheet1Rows.map(r1 => {
+    const r6 = map6[r1.companyName] || {};
+    const revenue = r6.revenue ? Math.round(parseFloat(r6.revenue)) : (r1.revenueOku ? Math.round(parseFloat(r1.revenueOku) * 100000) : null);
+    const ebitdaReal = r6.ebitdaReal ? Math.round(parseFloat(r6.ebitdaReal)) : (r1.ebitdaOku ? Math.round(parseFloat(r1.ebitdaOku) * 100000) : null);
+    const n = v => v != null && v !== "" ? Math.round(parseFloat(v)) || null : null;
+
+    return {
+      id: `imp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      userId: "u2", introducedBy: "u2", status: "active",
+      companyName: r1.companyName || r6.companyName || "—",
+      prefecture: r1.prefecture || r6.prefecture || "",
+      specialty: r1.specialty || r6.specialty || "",
+      stage: normalizeStage(r1.stage),
+      nextAction: r1.nextAction || "",
+      memo: r1.memo || r6.notes || "",
+      introducedByName: r1.introducedByName || "",
+      intermediaryContact: r1.intermediaryContact || "",
+      fdFee: n(r1.fdFee),
+      successFee: n(r1.successFee),
+      submittedAt: r1.submittedAt ? String(r1.submittedAt).slice(0, 10) : new Date().toISOString().slice(0, 10),
+      closingDate: r1.closingDate || null,
+      successorInfo: r1.successorInfo || "",
+      competitorInfo: "",
+      revenue, ebitdaReal,
+      grossProfit: n(r6.grossProfit),
+      operatingProfit: n(r6.operatingProfit),
+      depreciation: n(r6.depreciation),
+      pretaxProfit: n(r6.pretaxProfit),
+      ownerSalary: n(r6.ownerSalary),
+      ebitda: n(r6.ebitda),
+      cash: null, debt: null,
+      hopedPrice: n(r6.hopedPrice),
+      totalAssets: n(r6.totalAssets),
+      netAssets: n(r6.netAssets),
+      beds: n(r6.beds) || 0,
+      doctorAge: n(r6.doctorAge),
+      clinics: n(r6.clinics) || 1,
+      fullTimeDoctors: n(r6.fullTimeDoctors),
+      partTimeDoctors: n(r6.partTimeDoctors),
+      insuranceRatio: null, selfPayRatio: null,
+      patients3y: [], files: [],
+    };
+  });
+}
+
+function ExcelImport({ deals, onBulkAdd }) {
+  const [parsed, setParsed] = useState(null);
+  const [selected, setSelected] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+  const fileRef = useRef();
+
+  const handleFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setLoading(true); setError(""); setParsed(null);
     try {
-      const formData = new FormData()
-      formData.append('deal_name', companyName || dealName || '未設定案件')
-      newFiles.forEach(f => formData.append('files', f))
-      const res = await fetch(API + '/drive/upload', { method: 'POST', body: formData })
-      const data = await res.json()
-      if (data.status === 'ok') setDriveUploaded(prev => ({ ...prev, [key]: [...(prev[key] || []), ...data.uploaded] }))
-    } catch(e) { console.error('Drive upload error:', e) }
-    setDriveUploading(prev => ({ ...prev, [key]: false }))
-  }
-  function handleShared(key, checked) { setImShared(prev => ({ ...prev, [key]: checked })); if (checked) setImFiles(prev => ({ ...prev, [key]: [] })) }
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
 
-  async function submit() {
-    setSubmitting(true); setShowConfirm(false)
-    const fileNames = {}
-    Object.keys(imFiles).forEach(k => { fileNames[k] = imFiles[k].map(f => f.name) })
-    try {
-      const res = await fetch(API + '/gekiraku-im', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ advisor_name: selectedUser?.name || '', advisor_email: selectedUser?.email || '', deal_name: dealName, company_name: companyName, industry, scheme, fiscal_year_end: fiscalYearEnd, special_notes: specialNotes, im_format_file: imFormatFile || '', uploaded_files: fileNames, shared_files: Object.keys(imShared).filter(k => imShared[k]) }) })
-      const data = await res.json()
-      if (data.status === 'ok') setDone(true)
-      else alert('送信に失敗しました')
-    } catch { alert('送信エラーが発生しました') }
-    setSubmitting(false)
-  }
+      // Sheet1 と Sheet6 を探す（名前が違う場合も想定）
+      const ws1 = wb.Sheets["Sheet1"] || wb.Sheets[wb.SheetNames[0]];
+      const ws6 = wb.Sheets["Sheet6"] || wb.Sheets[wb.SheetNames.find(n => n.includes("6") || n.includes("財務")) || wb.SheetNames[5]];
 
-  const labelStyle = { display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, color: C.textMuted }
+      const rows1 = ws1 ? parseSheet(ws1, SHEET1_MAP) : [];
+      const rows6 = ws6 ? parseSheet(ws6, SHEET6_MAP) : [];
+
+      const merged = mergeRows(rows1, rows6);
+      if (merged.length === 0) { setError("案件データが見つかりませんでした。Sheet1の「案件名称」列を確認してください。"); setLoading(false); return; }
+
+      // 既存案件との重複チェック
+      const existingNames = new Set(deals.map(d => d.companyName));
+      const withDup = merged.map(r => ({ ...r, _isDuplicate: existingNames.has(r.companyName) }));
+
+      const sel = {};
+      withDup.forEach(r => { sel[r.id] = !r._isDuplicate; });
+      setParsed(withDup);
+      setSelected(sel);
+    } catch (err) {
+      setError("ファイルの読み込みに失敗しました: " + err.message);
+    }
+    setLoading(false);
+  };
+
+  const handleImport = () => {
+    const toImport = parsed.filter(r => selected[r.id]);
+    if (toImport.length === 0) { setError("インポートする案件を選択してください"); return; }
+    onBulkAdd(toImport);
+    setDone(true);
+  };
+
+  const toggleAll = (v) => {
+    const sel = {};
+    parsed.forEach(r => { sel[r.id] = v; });
+    setSelected(sel);
+  };
 
   if (done) return (
-    <div style={{ maxWidth: 600, margin: '80px auto', padding: '0 32px', fontFamily: FONT }}>
-      <div style={{ background: C.bgCard, borderRadius: 4, border: '1px solid ' + C.border, padding: '56px 40px', textAlign: 'center' }}>
-        <div style={{ width: 52, height: 52, borderRadius: '50%', border: '2px solid ' + C.navy, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', fontSize: 22, color: C.navy }}>✓</div>
-        <div style={{ fontSize: 22, fontWeight: 700, color: C.navy, marginBottom: 12 }}>発注が完了しました</div>
-        <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 32, lineHeight: 1.8 }}>SynapseDealチームに連絡しました。<br />担当よりご連絡いたします。</div>
-        <button onClick={onComplete} style={{ ...btn.secondary, padding: '11px 32px' }}>メニューに戻る</button>
-      </div>
+    <div style={{ textAlign: "center", padding: "80px 0" }}>
+      <div style={{ fontSize: 60, marginBottom: 16 }}>✅</div>
+      <h2 style={{ fontSize: 22, fontWeight: 800 }}>インポート完了</h2>
+      <p style={{ color: C.textSm }}>案件一覧に反映されました</p>
     </div>
-  )
+  );
 
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto', padding: isMobile ? '16px' : '40px 32px', fontFamily: FONT }}>
-      {showConfirm && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
-          <div style={{ background: C.cream, borderRadius: 4, padding: '40px 44px', width: 440, textAlign: 'center' }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: C.navy, marginBottom: 12 }}>ゲキラクIMを発注しますか？</div>
-            <div style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.8, marginBottom: 28 }}>入力内容をSynapseDealチームに送信します。<br />発注後のキャンセルはできません。</div>
-            <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-              <button onClick={() => setShowConfirm(false)} style={{ ...btn.ghost, padding: '10px 28px' }}>キャンセル</button>
-              <button onClick={submit} disabled={submitting} style={{ ...btn.primary, padding: '10px 32px', opacity: submitting ? 0.6 : 1 }}>{submitting ? '送信中...' : '発注する'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 28 }}>
-        <button onClick={onBack} style={{ ...btn.ghost, padding: '7px 14px', fontSize: 12 }}>← メニューへ</button>
-        <span style={{ color: C.border }}>/</span>
-        <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>IM作成依頼</span>
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: C.textLight, background: C.bgSub, padding: '4px 10px', borderRadius: 3 }}>担当：{selectedUser?.name}</span>
+    <div>
+      <div style={{ marginBottom: 28 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>Excelインポート</h1>
+        <p style={{ color: C.textSm, fontSize: 14, margin: "4px 0 0" }}>自社の案件管理Excelをアップロードすると、案件一覧に自動取り込みします</p>
       </div>
 
-      <StepIndicator current={step} labels={['案件情報（任意）', '資料準備', '確認・送信']} />
+      {/* 対応フォーマット説明 */}
+      <div style={{ ...sty.card, background: C.blueLt, border: `1px solid ${C.blue}30`, marginBottom: 24 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: C.blue, marginBottom: 10 }}>📋 対応フォーマット</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 13, color: C.textMd }}>
+          <div><strong>Sheet1（案件管理）</strong><br />案件名称、都道府県、診療科目、ステータス、Next Action、紹介元、FD報酬等</div>
+          <div><strong>Sheet6（財務サマリー）</strong><br />売上高、EBITDA（実態）、役員報酬、NetCash、希望金額、理事長年齢等</div>
+        </div>
+        <div style={{ marginTop: 10, fontSize: 12, color: C.textSm }}>※ Sheet1とSheet6の「案件名称」を照合してデータを結合します</div>
+      </div>
 
-      {step === 0 && (
-        <div>
-          <Card>
-            <CardHeader title="案件・対象情報（任意）" subtitle="以下の情報は任意です。入力がなくてもIM作成は可能です。" />
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-              {[
-                { label: '案件名', key: 'v_dealName', val: dealName, set: setDealName, ph: '例：製造業A社M&A案件' },
-                { label: '対象会社名', key: 'v_comp', val: companyName, set: setCompanyName, ph: '例：株式会社〇〇' },
-                { label: '業種', key: 'v_ind', val: industry, set: setIndustry, ph: '例：製造業・IT' },
-                { label: '決算期', key: 'v_fy', val: fiscalYearEnd, set: setFiscalYearEnd, ph: '例：3月末' },
-              ].map(f => (
-                <div key={f.key}>
-                  <label style={labelStyle}>{f.label}</label>
-                  <input style={inp} placeholder={f.ph} value={f.val} onChange={e => f.set(e.target.value)} />
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 16 }}>
-              <label style={labelStyle}>スキーム</label>
-              <select style={inp} value={scheme} onChange={e => setScheme(e.target.value)}>
-                <option>株式譲渡</option><option>事業譲渡</option><option>合併</option><option>会社分割</option>
-              </select>
-            </div>
-          </Card>
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button onClick={() => setStep(1)} style={{ ...btn.primary, padding: '11px 32px' }}>次へ</button>
-          </div>
+      {/* Upload area */}
+      {!parsed && (
+        <div
+          style={{ border: `2px dashed ${C.border}`, borderRadius: 16, padding: "60px 0", textAlign: "center", cursor: "pointer", background: C.white, transition: "all 0.2s" }}
+          onClick={() => fileRef.current?.click()}
+          onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = C.blue; e.currentTarget.style.background = C.blueLt; }}
+          onDragLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.white; }}
+          onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.white; const f = e.dataTransfer.files[0]; if (f) { const dt = new DataTransfer(); dt.items.add(f); fileRef.current.files = dt.files; handleFile({ target: { files: [f] } }); } }}>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleFile} />
+          <div style={{ fontSize: 48, marginBottom: 12 }}>📊</div>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Excelファイルをドロップ、またはクリックして選択</div>
+          <div style={{ fontSize: 13, color: C.textSm }}>.xlsx / .xls 対応</div>
+          {loading && <div style={{ marginTop: 16, color: C.blue, fontWeight: 600 }}>読み込み中...</div>}
+          {error && <div style={{ marginTop: 16, color: C.danger, fontSize: 13 }}>{error}</div>}
         </div>
       )}
 
-      {step === 1 && (
+      {/* Preview table */}
+      {parsed && (
         <div>
-          <Card>
-            <CardHeader title="資料のご準備" />
-            <div style={{ background: '#FDF8F0', border: '1px solid #E0CCAA', borderRadius: 4, padding: '12px 16px', marginBottom: 20, fontSize: 13, color: C.warning, lineHeight: 1.7 }}>
-              直接またはBOX・GoogleDrive経由でSynapseDeal担当をご招待いただくか、以下の資料を直接アップロードしてください。
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <div>
+              <span style={{ fontWeight: 700 }}>{parsed.length}件</span>を検出
+              <span style={{ marginLeft: 12, color: C.textSm, fontSize: 13 }}>（選択中: {Object.values(selected).filter(Boolean).length}件）</span>
+              {parsed.some(r => r._isDuplicate) && (
+                <span style={{ marginLeft: 12, ...sty.badge(C.warn) }}>⚠ 重複 {parsed.filter(r => r._isDuplicate).length}件（デフォルト未選択）</span>
+              )}
             </div>
-            {DOCUMENTS.map(doc => (
-              <div key={doc.key} style={{ borderBottom: '1px solid ' + C.border, padding: '14px 0' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                  {doc.required && <Badge variant="danger">必須</Badge>}
-                  <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{doc.label}</span>
-                  {doc.period && <span style={{ fontSize: 11, color: C.textLight }}>（{doc.period}）</span>}
-                </div>
-                <DropZone docKey={doc.key} onFiles={handleFiles} files={imFiles} isShared={imShared} onSharedChange={handleShared} driveUploading={driveUploading[doc.key]} driveUploaded={driveUploaded[doc.key]} />
-              </div>
-            ))}
-          </Card>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <button onClick={() => setStep(0)} style={{ ...btn.ghost, padding: '10px 24px' }}>← 戻る</button>
-            <button onClick={() => setStep(2)} style={{ ...btn.primary, padding: '11px 32px' }}>次へ</button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={sty.btn("ghost", true)} onClick={() => toggleAll(true)}>全選択</button>
+              <button style={sty.btn("ghost", true)} onClick={() => toggleAll(false)}>全解除</button>
+              <button style={sty.btn("ghost", true)} onClick={() => { setParsed(null); setError(""); fileRef.current.value = ""; }}>やり直し</button>
+              <button style={sty.btn("primary")} onClick={handleImport}>
+                ✅ {Object.values(selected).filter(Boolean).length}件をインポート
+              </button>
+            </div>
           </div>
-        </div>
-      )}
 
-      {step === 2 && (
-        <div>
-          <Card>
-            <CardHeader title="特記事項" />
-            <textarea style={{ ...inp, minHeight: 110, resize: 'vertical' }} placeholder="特殊事情・リスク情報など" value={specialNotes} onChange={e => setSpecialNotes(e.target.value)} />
-          </Card>
-          <Card>
-            <CardHeader title="発注内容の確認" />
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              {[
-                ['担当者', `${selectedUser?.name}（${selectedUser?.email}）`],
-                ['対象会社', companyName || '未入力'],
-                ['業種', industry || '未入力'],
-                ['スキーム', scheme],
-                ['決算期', fiscalYearEnd || '未入力'],
-                ['準備資料', `${Object.keys(imFiles).filter(k => imFiles[k]?.length > 0).length + Object.keys(imShared).filter(k => imShared[k]).length}件`],
-              ].map(([k, v]) => (
-                <tr key={k} style={{ borderBottom: '1px solid ' + C.border }}>
-                  <td style={{ padding: '10px 0', width: 120, color: C.textLight, fontSize: 12, fontWeight: 700 }}>{k}</td>
-                  <td style={{ padding: '10px 0', color: C.text }}>{v}</td>
+          {error && <div style={{ color: C.danger, fontSize: 13, marginBottom: 12 }}>{error}</div>}
+
+          <div style={sty.card}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+                  <th style={{ padding: "8px 10px", width: 40 }}>
+                    <input type="checkbox" checked={Object.values(selected).every(Boolean)} onChange={e => toggleAll(e.target.checked)} />
+                  </th>
+                  {["法人名", "都道府県", "診療科", "ステージ", "売上(千円)", "EBITDA実態(千円)", "希望価格(千円)", "マルチプル", "状態"].map(h => (
+                    <th key={h} style={{ textAlign: "left", padding: "8px 10px", color: C.textSm, fontWeight: 700 }}>{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </table>
-          </Card>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <button onClick={() => setStep(1)} style={{ ...btn.ghost, padding: '10px 24px' }}>← 戻る</button>
-            <button onClick={() => setShowConfirm(true)} style={{ ...btn.primary, padding: '12px 36px', fontSize: 14 }}>ゲキラクIMを発注する</button>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ==================== MAIN APP ====================
-export default function App() {
-  const [session, setSession] = useState(null)
-  const [authLoading, setAuthLoading] = useState(true)
-  const [domainAllowed, setDomainAllowed] = useState(null)
-  const [onboardingDone, setOnboardingDone] = useState(null)
-  const [checkingAccess, setCheckingAccess] = useState(false)
-  const [companyName, setCompanyName] = useState('')
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); setAuthLoading(false) })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => { setSession(session) })
-    return () => subscription.unsubscribe()
-  }, [])
-
-  useEffect(() => { if (session) checkAccess() }, [session])
-
-  async function checkAccess() {
-    setCheckingAccess(true)
-    const domain = session.user.email.split('@')[1]
-    const { data: domainData } = await supabase.from('allowed_domains').select('domain').eq('domain', domain).eq('is_active', true).single()
-    if (!domainData) { setDomainAllowed(false); setCheckingAccess(false); return }
-    setDomainAllowed(true)
-    const { data: profileData } = await supabase.from('company_profiles').select('id, company_name').eq('user_id', session.user.id).single()
-    setOnboardingDone(!!profileData)
-    if (profileData?.company_name) setCompanyName(profileData.company_name)
-    setCheckingAccess(false)
-  }
-
-  async function handleLogout() {
-    await supabase.auth.signOut()
-    setDomainAllowed(null); setOnboardingDone(null)
-  }
-
-  const [activeTab, setActiveTab] = useState('dashboard')
-  const [scoringDeal, setScoringDeal] = useState(null)
-
-  function startScoring(deal) {
-    setScoringDeal(deal)
-    setActiveTab('scoring')
-  }
-  const [deals, setDeals] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
-  const [selectedDeal, setSelectedDeal] = useState(null)
-  const [ddResult, setDdResult] = useState(null)
-  const [ddLoading, setDdLoading] = useState(false)
-  const [additionalInfo, setAdditionalInfo] = useState('')
-  const [form, setForm] = useState({ deal_name: '', industry: '', scheme: '株式譲渡', ma_strategy: '', advisor_mode: 'junior', corporate_number: '', seller_address: '' })
-  const [users, setUsers] = useState(() => loadJSON(USERS_KEY, [{ id: '1', name: '', email: '', role: 'advisor' }]))
-  const [companySaved, setCompanySaved] = useState(false)
-  const [imFormatFile, setImFormatFile] = useState(() => localStorage.getItem(IM_FORMAT_KEY) || '')
-  const [tickets] = useState(() => loadJSON(TICKETS_KEY, 3))
-  const [imView, setImView] = useState('menu')
-  const [selectedUserId, setSelectedUserId] = useState('')
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [hoveredMenu, setHoveredMenu] = useState(null)
-  const hoverTimer = useRef(null)
-  const setHoveredMenuDelayed = (key) => {
-    if (hoverTimer.current) clearTimeout(hoverTimer.current)
-    if (key) {
-      setHoveredMenu(key)
-    } else {
-      hoverTimer.current = setTimeout(() => setHoveredMenu(null), 120)
-    }
-  }
-
-  useEffect(() => { if (session && onboardingDone) fetchDeals() }, [session, onboardingDone])
-
-  async function fetchDeals() {
-    setLoading(true)
-    try { const res = await fetch(API + '/deals'); const data = await res.json(); setDeals(data.deals || []) }
-    catch { setDeals([]) }
-    setLoading(false)
-  }
-
-  async function createDeal() {
-    if (!form.deal_name.trim()) return alert('案件名を入力してください')
-    try {
-      await fetch(API + '/deals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
-      setShowModal(false); setForm({ deal_name: '', industry: '', scheme: '株式譲渡', ma_strategy: '', advisor_mode: 'junior' }); fetchDeals()
-    } catch { alert('エラーが発生しました') }
-  }
-
-  const [editingDeal, setEditingDeal] = useState(null)
-  const [editForm, setEditForm] = useState({})
-  const [deletingDeal, setDeletingDeal] = useState(null)
-
-  async function deleteDeal(id) {
-    try {
-      await fetch(API + '/deals/' + id, { method: 'DELETE' })
-      setDeletingDeal(null)
-      fetchDeals()
-    } catch { alert('削除エラーが発生しました') }
-  }
-
-  async function updateDeal() {
-    try {
-      await fetch(API + '/deals/' + editingDeal.id, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editForm)
-      })
-      setEditingDeal(null)
-      fetchDeals()
-    } catch { alert('更新エラーが発生しました') }
-  }
-
-  async function runDDPrep() {
-    setDdLoading(true); setDdResult(null)
-    try {
-      const res = await fetch(API + '/deals/' + selectedDeal.id + '/dd-prep', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ additional_info: additionalInfo }) })
-      const data = await res.json(); setDdResult(data.result)
-    } catch { alert('AIエラーが発生しました') }
-    setDdLoading(false)
-  }
-
-  function saveSettings() {
-    localStorage.setItem(USERS_KEY, JSON.stringify(users.map((u, i) => ({ ...u, id: u.id || String(i + 1) }))))
-    localStorage.setItem(IM_FORMAT_KEY, imFormatFile)
-    setCompanySaved(true); setTimeout(() => setCompanySaved(false), 3000)
-  }
-
-  const phaseLabel = (key) => PHASES.find(p => p.key === key)?.label || key
-  const selectedUser = users.find(u => u.id === selectedUserId)
-
-  const labelStyle = { display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, color: C.textMuted }
-
-  // dealsをコンポーネント用に整形
-  const dealsForComponents = [
-    // ダミーデータ（常に先頭に表示）
-    { id: DEMO_DEAL.id, company_name: DEMO_DEAL.company_name, seller_name: DEMO_DEAL.seller_name,
-      industry: DEMO_DEAL.industry, business: DEMO_DEAL.business, ma_strategy: DEMO_DEAL.ma_strategy,
-      annual_revenue: DEMO_DEAL.sales, transaction_amount: DEMO_DEAL.transaction_amount,
-      deal_name: DEMO_DEAL.deal_name },
-    // 実データ
-    ...deals.map(d => ({
-      id: d.id, company_name: d.deal_name, seller_name: d.deal_name,
-      industry: d.industry, business: d.ma_strategy, annual_revenue: '', transaction_amount: '',
-    }))
-  ]
-
-  if (window.location.pathname === '/reset-password') return <ResetPasswordPage />
-  if (authLoading || checkingAccess) return (
-    <div style={{ minHeight: '100vh', background: C.cream, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT }}>
-      <div style={{ fontSize: 13, color: C.textLight }}>読み込み中...</div>
-    </div>
-  )
-  if (!session) return <AuthScreen />
-  if (domainAllowed === false) return <DomainNotAllowedScreen email={session.user.email} onLogout={handleLogout} />
-  if (onboardingDone === false) return <OnboardingScreen session={session} onComplete={({ companyName: cn }) => { setCompanyName(cn); setOnboardingDone(true); fetchDeals() }} />
-
-  // レスポンシブ判定
-  const isMobile = window.innerWidth < 768;
-
-  return (
-    <div style={{ minHeight: '100vh', background: C.bg, fontFamily: FONT, display: 'flex', flexDirection: 'column' }}>
-
-      {/* ヘッダー */}
-      <header style={{ background: '#FFFFFF', color: C.text, padding: '0 16px', height: 52, borderBottom: '1px solid ' + C.border, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'fixed', top: 0, left: 0, right: 0, zIndex: 200 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {/* モバイル：ハンバーガーボタン */}
-          {isMobile && (
-            <button onClick={() => setSidebarOpen(v => !v)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span style={{ display: 'block', width: 18, height: 2, background: C.navy, borderRadius: 1, transition: 'all 0.2s', transform: sidebarOpen ? 'rotate(45deg) translate(4px,4px)' : 'none' }}/>
-              <span style={{ display: 'block', width: 18, height: 2, background: C.navy, borderRadius: 1, transition: 'all 0.2s', opacity: sidebarOpen ? 0 : 1 }}/>
-              <span style={{ display: 'block', width: 18, height: 2, background: C.navy, borderRadius: 1, transition: 'all 0.2s', transform: sidebarOpen ? 'rotate(-45deg) translate(4px,-4px)' : 'none' }}/>
-            </button>
-          )}
-          <img src="/logo.png" alt="SYNAPSE DEAL" style={{ height: isMobile ? 22 : 28 }} onError={e => { e.target.style.display="none" }} />
-          <span style={{ fontSize: isMobile ? 13 : 15, fontWeight: 700, color: C.navy, letterSpacing: '-0.02em' }}>SYNAPSE DEAL</span>
-          {!isMobile && <><span style={{ width: 1, height: 16, background: C.border }} /><span style={{ fontSize: 11, color: C.textMuted }}>M&A Agent Platform</span></>}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 20 }}>
-          {!isMobile && <span style={{ fontSize: 12, color: C.textMuted }}>{companyName}</span>}
-          {!isMobile && <span style={{ fontSize: 12, color: C.textMuted }}>{session?.user?.email}</span>}
-          <button onClick={handleLogout} style={{ fontSize: 11, color: C.textMuted, background: 'none', border: '1px solid ' + C.border, borderRadius: 3, padding: '4px 10px', cursor: 'pointer', fontFamily: FONT }}>ログアウト</button>
-        </div>
-      </header>
-
-      {/* メインレイアウト */}
-      <div style={{ display: 'flex', flex: 1, marginTop: 52 }}>
-
-        {/* 左端センサー（PCのみ） */}
-        {!isMobile && !sidebarOpen && (
-          <div onMouseEnter={() => setSidebarOpen(true)}
-            style={{ position: 'fixed', top: 52, left: 0, bottom: 0, width: 6, zIndex: 150 }} />
-        )}
-
-        {/* モバイル：オーバーレイ */}
-        {isMobile && sidebarOpen && (
-          <div onClick={() => { setSidebarOpen(false); setHoveredMenu(null) }}
-            style={{ position: 'fixed', inset: 0, top: 52, zIndex: 95, background: 'rgba(0,0,0,0.4)' }} />
-        )}
-
-        {/* ==================== 左サイドバー ==================== */}
-        <aside
-          onMouseLeave={() => { if (!isMobile) { setSidebarOpen(false); setHoveredMenuDelayed(null) } }}
-          style={{
-            width: 200, minWidth: 200,
-            background: '#fff',
-            borderRight: '1px solid ' + C.border,
-            boxShadow: sidebarOpen ? '4px 0 16px rgba(0,0,0,0.10)' : 'none',
-            position: 'fixed', top: 52, bottom: 0,
-            zIndex: 100,
-            transform: sidebarOpen ? 'translateX(0)' : 'translateX(-200px)',
-            transition: 'transform 0.18s ease, box-shadow 0.18s ease',
-            overflow: 'visible',
-          }}
-        >
-          <nav style={{ width: 200, padding: '8px 0' }}>
-            {[
-              { key: 'dashboard', label: 'ダッシュボード', children: [] },
-              { key: '_deals', label: '案件管理', children: [
-                { key: 'nda', label: 'NDA締結', contractType: 'NDA' },
-                { key: 'pipeline', label: '営業パイプライン' },
-                { key: 'advisory', label: 'アドバイザリー契約支援', contractType: 'Advisory' },
-                { key: 'deals', label: '案件管理パイプライン' },
-                { key: 'scoring', label: '候補先選定' },
-                { key: 'loi', label: 'LOI作成支援', contractType: 'LOI' },
-                { key: 'mou', label: 'MOU作成支援', contractType: 'MOU' },
-              ]},
-              { key: 'gekiraku_im', label: 'IM作成支援', children: [] },
-              { key: 'valuation', label: '企業価値算定', children: [] },
-              { key: 'dd', label: 'デューデリジェンス支援', children: [] },
-              { key: '_final', label: '最終契約支援', children: [
-                { key: 'da', label: 'DA作成支援', contractType: 'DA' },
-                { key: 'pre_closing', label: 'プレクロージング資料' },
-                { key: 'post_closing', label: 'ポストクロージング資料' },
-              ]},
-              { key: 'company', label: '設定', children: [] },
-            ].map(item => {
-              const hasChildren = item.children && item.children.length > 0
-              const isGroupActive = item.children?.some(c => activeTab === c.key || activeTab === 'contract_' + c.contractType)
-              const isActive = activeTab === item.key || isGroupActive
-              const isHovered = hoveredMenu === item.key
-
-              return (
-                <div key={item.key} style={{ position: 'relative' }}
-                  onMouseEnter={() => setHoveredMenuDelayed(hasChildren ? item.key : null)}
-                  onMouseLeave={() => setHoveredMenuDelayed(null)}
-                >
-                  <button
-                    onClick={() => { if (!hasChildren) { setActiveTab(item.key); setImView('menu'); setSidebarOpen(false); setHoveredMenu(null) }}}
-                    style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      width: '100%', padding: '10px 16px',
-                      fontSize: 13, fontWeight: isActive ? 700 : 500,
-                      border: 'none',
-                      background: isHovered ? '#EEF2F7' : isActive ? '#EEF2F7' : 'none',
-                      color: isActive || isHovered ? C.navy : C.text,
-                      cursor: hasChildren ? 'default' : 'pointer', textAlign: 'left',
-                      borderLeft: isActive ? '3px solid ' + C.navy : '3px solid transparent',
-                      fontFamily: FONT, whiteSpace: 'nowrap',
-                    }}
-                    onMouseEnter={e => { if (!isActive && !hasChildren) e.currentTarget.style.background = '#f8fafc' }}
-                    onMouseLeave={e => { if (!isActive && !hasChildren) e.currentTarget.style.background = 'none' }}
-                  >
-                    <span>{item.label}</span>
-                    {hasChildren && <span style={{ fontSize: 11, color: '#94a3b8' }}>›</span>}
-                  </button>
-
-                  {/* フライアウトサブメニュー */}
-                  {hasChildren && isHovered && (
-                    <div
-                      onMouseEnter={() => setHoveredMenuDelayed(item.key)}
-                      onMouseLeave={() => setHoveredMenuDelayed(null)}
-                      style={{
-                        position: 'fixed', left: 200,
-                        background: '#fff', border: '1px solid ' + C.border,
-                        borderRadius: '0 8px 8px 0',
-                        boxShadow: '6px 4px 20px rgba(0,0,0,0.12)',
-                        minWidth: 210, zIndex: 300, padding: '6px 0',
-                        marginLeft: -1,
-                      }}
-                    >
-                      <div style={{ padding: '6px 14px 6px', fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.1em', textTransform: 'uppercase', borderBottom: '1px solid #f1f5f9', marginBottom: 4 }}>
-                        {item.label}
-                      </div>
-                      {item.children.map(child => {
-                        const childActive = activeTab === child.key || activeTab === 'contract_' + child.contractType
-                        return (
-                          <button key={child.key}
-                            onClick={() => {
-                              if (child.contractType) setActiveTab('contract_' + child.contractType)
-                              else { setActiveTab(child.key); setImView('menu') }
-                              setSidebarOpen(false); setHoveredMenu(null)
-                            }}
-                            style={{
-                              display: 'block', width: '100%', padding: '9px 18px',
-                              fontSize: 13, fontWeight: childActive ? 700 : 400,
-                              border: 'none', background: childActive ? '#EEF2F7' : 'none',
-                              color: childActive ? C.navy : C.text,
-                              cursor: 'pointer', textAlign: 'left',
-                              borderLeft: childActive ? '3px solid ' + C.navy : '3px solid transparent',
-                              fontFamily: FONT, whiteSpace: 'nowrap',
-                            }}
-                            onMouseEnter={e => { if (!childActive) e.currentTarget.style.background = '#f8fafc' }}
-                            onMouseLeave={e => { if (!childActive) e.currentTarget.style.background = 'none' }}
-                          >
-                            {child.label}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </nav>
-        </aside>
-
-        {/* ==================== メインコンテンツ ==================== */}
-        <main style={{ flex: 1, marginLeft: 0, minHeight: 'calc(100vh - 52px)', background: C.bg, overflowY: 'auto' }}>
-
-          {/* ダッシュボード */}
-          {activeTab === 'dashboard' && (
-            <Dashboard session={session} deals={deals} tickets={tickets} companyName={companyName}
-              onNavigate={key => { setActiveTab(key); setImView('menu') }} />
-          )}
-
-          {/* 営業パイプライン */}
-          {activeTab === 'pipeline' && <Pipeline onStartScoring={startScoring} />}
-
-          {/* 候補先選定 */}
-          {activeTab === 'scoring' && <ScoringEngine initialTab={scoringDeal ? '候補先選定' : '案件管理'} initialDeal={scoringDeal} />}
-
-          {/* 契約書系（contractType別） */}
-          {activeTab === 'contract_NDA' && (
-            <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}>
-              <ContractCreation deals={dealsForComponents} defaultType="NDA" />
-            </div>
-          )}
-          {activeTab === 'contract_Advisory' && (
-            <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}>
-              <ContractCreation deals={dealsForComponents} defaultType="Advisory" />
-            </div>
-          )}
-          {activeTab === 'contract_LOI' && (
-            <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}>
-              <ContractCreation deals={dealsForComponents} defaultType="LOI" />
-            </div>
-          )}
-          {activeTab === 'contract_MOU' && (
-            <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}>
-              <ContractCreation deals={dealsForComponents} defaultType="MOU" />
-            </div>
-          )}
-          {activeTab === 'contract_DA' && (
-            <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}>
-              <ContractCreation deals={dealsForComponents} defaultType="DA" />
-            </div>
-          )}
-          {/* 旧キーとの後方互換 */}
-          {activeTab === 'nda'      && <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}><ContractCreation deals={dealsForComponents} defaultType="NDA" /></div>}
-          {activeTab === 'advisory' && <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}><ContractCreation deals={dealsForComponents} defaultType="Advisory" /></div>}
-          {activeTab === 'loi'      && <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}><ContractCreation deals={dealsForComponents} defaultType="LOI" /></div>}
-          {activeTab === 'mou'      && <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}><ContractCreation deals={dealsForComponents} defaultType="MOU" /></div>}
-          {activeTab === 'da'       && <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}><ContractCreation deals={dealsForComponents} defaultType="DA" /></div>}
-          {activeTab === 'contract' && <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}><ContractCreation deals={dealsForComponents} /></div>}
-
-          {/* プレ/ポストクロージング */}
-          {(activeTab === 'pre_closing' || activeTab === 'post_closing') && (
-            <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}>
-              <div style={{ background: '#fff', border: '1px solid ' + C.border, borderRadius: 12, padding: 32 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, letterSpacing: '0.1em', marginBottom: 8 }}>
-                  {activeTab === 'pre_closing' ? 'PRE-CLOSING' : 'POST-CLOSING'}
-                </div>
-                <h2 style={{ fontSize: 22, fontWeight: 700, color: C.navy, marginBottom: 12 }}>
-                  {activeTab === 'pre_closing' ? '📦 プレクロージング資料作成' : '🏁 ポストクロージング資料作成'}
-                </h2>
-                <p style={{ color: C.textMuted, fontSize: 14, lineHeight: 1.8, marginBottom: 24 }}>
-                  {activeTab === 'pre_closing'
-                    ? 'クロージング前に必要な書類（株主名簿・株券・各種同意書・官公庁届出等）の作成支援です。'
-                    : 'クロージング後に必要な書類（登記申請・役員変更届・取引先通知等）の作成支援です。'}
-                </p>
-                <div style={{ padding: '16px 20px', background: C.bgSub, borderRadius: 8, border: '1px solid ' + C.border, fontSize: 13, color: C.textMuted }}>
-                  🚧 この機能は準備中です。SynapseDeal BPOサービスにてサポートします。
-                </div>
-                <div style={{ marginTop: 20 }}>
-                  <BPOButton context={activeTab === 'pre_closing' ? 'プレクロージング資料作成' : 'ポストクロージング資料作成'} />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* IM作成支援 */}
-          {activeTab === 'gekiraku_im' && imView === 'menu' && (
-            <GekirakuMenu users={users.filter(u => u.name && u.email)} tickets={tickets} selectedUserId={selectedUserId} onSelectUser={setSelectedUserId} onOrder={() => setImView('order')} />
-          )}
-          {activeTab === 'gekiraku_im' && imView === 'order' && (
-            <GekirakuOrder selectedUser={selectedUser} imFormatFile={imFormatFile} onComplete={() => setImView('menu')} onBack={() => setImView('menu')} />
-          )}
-
-          {/* 企業価値算定 */}
-          {activeTab === 'valuation' && (
-            <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}>
-              <Valuation deals={dealsForComponents} />
-            </div>
-          )}
-
-          {/* DD支援 */}
-          {activeTab === 'dd' && (
-            <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}>
-              <DueDiligence deals={dealsForComponents} />
-            </div>
-          )}
-
-          {/* 案件管理パイプライン */}
-          {activeTab === 'deals' && !selectedDeal && (
-            <div style={{ maxWidth: 1100, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 28, paddingBottom: 16, borderBottom: '1px solid ' + C.border }}>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, letterSpacing: '0.1em', marginBottom: 6 }}>案件管理パイプライン</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: C.navy }}>案件一覧</div>
-                </div>
-                <button onClick={() => setShowModal(true)} style={{ ...btn.primary, padding: '10px 24px' }}>新規案件を作成</button>
-              </div>
-              {/* エクスポートボタン */}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-                <ExportExcelButton
-                  filename="案件管理パイプライン"
-                  sheets={[{ name: '案件一覧', rows: deals.map(d => ({
-                    案件名: d.deal_name, 業種: d.industry||'', スキーム: d.scheme,
-                    フェーズ: phaseLabel(d.phase), アドバイザーモード: d.advisor_mode==='junior'?'新人':'ベテラン',
-                    'MA戦略': d.ma_strategy||'', 登録日: new Date(d.created_at).toLocaleDateString('ja-JP'),
-                  })) }]}
-                />
-              </div>
-              {loading ? (
-                <div style={{ textAlign: 'center', padding: 80, color: C.textLight, fontSize: 13 }}>読み込み中...</div>
-              ) : deals.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '80px 0', color: C.textLight }}>
-                  <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8, color: C.text }}>案件がありません</div>
-                  <button onClick={() => setShowModal(true)} style={{ ...btn.secondary }}>新規案件を作成</button>
-                </div>
-              ) : (
-                <div style={{ border: '1px solid ' + C.border, borderRadius: 4, overflow: 'hidden' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ background: C.bgSub }}>
-                        {['案件名', '業種', 'スキーム', 'フェーズ', 'モード', '登録日', '操作'].map(h => (
-                          <th key={h} style={{ padding: '11px 16px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: C.textLight, letterSpacing: '0.06em', borderBottom: '1px solid ' + C.border }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {deals.map((deal) => (
-                        <tr key={deal.id} onClick={() => setSelectedDeal(deal)}
-                          style={{ borderBottom: '1px solid ' + C.border, cursor: 'pointer', transition: 'background 0.1s' }}
-                          onMouseEnter={e => e.currentTarget.style.background = C.bgSub}
-                          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                          <td style={{ padding: '13px 16px', fontWeight: 700, color: C.navy }}>{deal.deal_name}</td>
-                          <td style={{ padding: '13px 16px', color: C.textMuted }}>{deal.industry || '—'}</td>
-                          <td style={{ padding: '13px 16px', color: C.textMuted }}>{deal.scheme}</td>
-                          <td style={{ padding: '13px 16px' }}><Badge>{phaseLabel(deal.phase)}</Badge></td>
-                          <td style={{ padding: '13px 16px' }}><Badge variant={deal.advisor_mode === 'junior' ? 'warning' : 'success'}>{deal.advisor_mode === 'junior' ? '新人' : 'ベテラン'}</Badge></td>
-                          <td style={{ padding: '13px 16px', color: C.textLight, fontSize: 12 }}>{new Date(deal.created_at).toLocaleDateString('ja-JP')}</td>
-                          <td style={{ padding: '8px 16px' }} onClick={e => e.stopPropagation()}>
-                            <div style={{ display: 'flex', gap: 6 }}>
-                              <button onClick={e => { e.stopPropagation(); setEditForm({ deal_name: deal.deal_name, industry: deal.industry, scheme: deal.scheme, phase: deal.phase, ma_strategy: deal.ma_strategy, advisor_mode: deal.advisor_mode }); setEditingDeal(deal) }}
-                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: '1px solid ' + C.navy, borderRadius: 4, background: 'white', color: C.navy, cursor: 'pointer' }}>編集</button>
-                              <button onClick={e => { e.stopPropagation(); setDeletingDeal(deal) }}
-                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: '1px solid #E53E3E', borderRadius: 4, background: 'white', color: '#E53E3E', cursor: 'pointer' }}>削除</button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'deals' && selectedDeal && (
-            <div style={{ maxWidth: 900, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 28 }}>
-                <button onClick={() => { setSelectedDeal(null); setDdResult(null) }} style={{ ...btn.ghost, padding: '7px 14px', fontSize: 12 }}>← 案件一覧</button>
-                <span style={{ color: C.border }}>/</span>
-                <span style={{ fontSize: 13, color: C.textMuted }}>{selectedDeal.deal_name}</span>
-              </div>
-              <Card>
-                <div style={{ fontSize: 22, fontWeight: 700, color: C.navy, marginBottom: 8 }}>{selectedDeal.deal_name}</div>
-                <div style={{ display: 'flex', gap: 16, marginBottom: 20, fontSize: 12, color: C.textMuted }}>
-                  {selectedDeal.industry && <span>{selectedDeal.industry}</span>}
-                  <span>{selectedDeal.scheme}</span>
-                </div>
-                {selectedDeal.ma_strategy && (
-                  <div style={{ borderLeft: '3px solid ' + C.navy, paddingLeft: 16, marginBottom: 20, fontSize: 13, color: C.textMuted, lineHeight: 1.7 }}>{selectedDeal.ma_strategy}</div>
-                )}
-                <label style={labelStyle}>補足情報（任意）</label>
-                <textarea style={{ ...inp, minHeight: 90, resize: 'vertical', marginBottom: 16 }} placeholder="売主へのヒアリング情報" value={additionalInfo} onChange={e => setAdditionalInfo(e.target.value)} />
-                <button onClick={runDDPrep} disabled={ddLoading}
-                  style={{ ...btn.primary, opacity: ddLoading ? 0.6 : 1, cursor: ddLoading ? 'not-allowed' : 'pointer' }}>
-                  {ddLoading ? '生成中...' : 'DDサポートを作成'}
-                </button>
-              </Card>
-              {ddLoading && <div style={{ textAlign: 'center', padding: 48, color: C.textLight, fontSize: 13 }}>Claudeが思考中です...</div>}
-              {ddResult && (
-                <div>
-                  <Card><CardHeader title="DDの全体観" /><div style={{ fontSize: 14, lineHeight: 1.9, color: C.textMuted }}>{ddResult.overview}</div></Card>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* 設定 */}
-          {activeTab === 'company' && (
-            <div style={{ maxWidth: 800, margin: '0 auto', padding: isMobile ? '16px' : '32px 32px' }}>
-              <div style={{ marginBottom: 28, paddingBottom: 16, borderBottom: '1px solid ' + C.border }}>
-                <div style={{ fontSize: 22, fontWeight: 700, color: C.navy }}>設定</div>
-              </div>
-              <Card>
-                <CardHeader title="ユーザー管理" subtitle="ゲキラクIMは会社単位で全ユーザーが利用可能です。" />
-                {users.map((user, i) => (
-                  <div key={user.id} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: 10, marginBottom: 10, alignItems: 'center' }}>
-                    <input style={inp} placeholder="氏名" value={user.name} onChange={e => { const u = [...users]; u[i] = { ...u[i], name: e.target.value }; setUsers(u) }} />
-                    <input style={inp} placeholder="メールアドレス" value={user.email} onChange={e => { const u = [...users]; u[i] = { ...u[i], email: e.target.value }; setUsers(u) }} />
-                    <select style={{ ...inp, width: 'auto' }} value={user.role} onChange={e => { const u = [...users]; u[i] = { ...u[i], role: e.target.value }; setUsers(u) }}>
-                      <option value="admin">管理者</option><option value="advisor">アドバイザー</option><option value="viewer">閲覧のみ</option>
-                    </select>
-                    {users.length > 1 && <button onClick={() => setUsers(users.filter((_, j) => j !== i))} style={{ ...btn.ghost, padding: '8px 12px', fontSize: 12, color: C.danger, borderColor: '#E8C0C0' }}>削除</button>}
-                  </div>
+              </thead>
+              <tbody>
+                {parsed.map(r => (
+                  <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}`, background: r._isDuplicate ? "#fffbeb" : selected[r.id] ? C.blueLt : "" }}>
+                    <td style={{ padding: "9px 10px" }}>
+                      <input type="checkbox" checked={!!selected[r.id]} onChange={e => setSelected(s => ({ ...s, [r.id]: e.target.checked }))} />
+                    </td>
+                    <td style={{ padding: "9px 10px", fontWeight: 700 }}>{r.companyName}</td>
+                    <td style={{ padding: "9px 10px" }}>{r.prefecture || "—"}</td>
+                    <td style={{ padding: "9px 10px" }}>{r.specialty || "—"}</td>
+                    <td style={{ padding: "9px 10px" }}><Tag label={r.stage} color={STAGE_COLORS[r.stage] || C.textSm} /></td>
+                    <td style={{ padding: "9px 10px", fontFamily: "monospace" }}>{fmt(r.revenue)}</td>
+                    <td style={{ padding: "9px 10px", fontFamily: "monospace", fontWeight: 700 }}>{fmt(r.ebitdaReal)}</td>
+                    <td style={{ padding: "9px 10px", fontFamily: "monospace" }}>{fmt(r.hopedPrice)}</td>
+                    <td style={{ padding: "9px 10px", fontWeight: 800, color: C.blue }}>{multiple(r.hopedPrice, r.ebitdaReal)}</td>
+                    <td style={{ padding: "9px 10px" }}>
+                      {r._isDuplicate
+                        ? <span style={sty.badge(C.warn)}>重複</span>
+                        : <span style={sty.badge(C.success)}>新規</span>}
+                    </td>
+                  </tr>
                 ))}
-                <button onClick={() => setUsers(u => [...u, { id: String(Date.now()), name: '', email: '', role: 'advisor' }])}
-                  style={{ ...btn.secondary, padding: '8px 18px', fontSize: 12, marginTop: 8 }}>
-                  ユーザーを追加
-                </button>
-              </Card>
-              <Card>
-                <CardHeader title="IMフォーマット設定" />
-                <SimpleDropZone label="IMフォーマットをアップロード（Word / Excel / PDF）" onFile={f => setImFormatFile(f.name)} fileName={imFormatFile} />
-              </Card>
-              {companySaved && <div style={{ fontSize: 12, color: C.success, background: C.successBg, border: '1px solid #B0D8BC', borderRadius: 4, padding: '10px 16px', marginBottom: 16 }}>保存しました</div>}
-              <button onClick={saveSettings} style={{ ...btn.primary, padding: '11px 32px' }}>保存する</button>
-            </div>
-          )}
-
-        </main>
-      </div>
-
-      {/* ==================== モーダル群 ==================== */}
-
-      {/* 案件編集 */}
-      {editingDeal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <div style={{ background: '#fff', borderRadius: 12, padding: '36px 32px', maxWidth: 520, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: C.navy, marginBottom: 24 }}>案件を編集</div>
-            <CorporateNumberSearch compact onResult={(data) => setEditForm(f => ({ ...f, corporate_number: data.number || '', seller_address: data.address || '' }))} />
-            {[{ label: '案件名', key: 'deal_name' }, { label: '業種', key: 'industry' }, { label: 'M&A戦略メモ', key: 'ma_strategy' }].map(({ label, key }) => (
-              <div key={key} style={{ marginBottom: 16 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>{label}</label>
-                <input value={editForm[key] || ''} onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))} style={{ ...inp, width: '100%', boxSizing: 'border-box' }} />
-              </div>
-            ))}
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>スキーム</label>
-              <select value={editForm.scheme || '株式譲渡'} onChange={e => setEditForm(f => ({ ...f, scheme: e.target.value }))} style={{ ...inp, width: '100%', boxSizing: 'border-box' }}>
-                {['株式譲渡', '事業譲渡', '合併', '株式交換', '第三者割当増資'].map(s => <option key={s}>{s}</option>)}
-              </select>
-            </div>
-            <div style={{ marginBottom: 24 }}>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>フェーズ</label>
-              <select value={editForm.phase || 'sourcing'} onChange={e => setEditForm(f => ({ ...f, phase: e.target.value }))} style={{ ...inp, width: '100%', boxSizing: 'border-box' }}>
-                {PHASES.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-              </select>
-            </div>
-            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
-              <button onClick={() => setEditingDeal(null)} style={{ ...btn.secondary, padding: '10px 24px' }}>キャンセル</button>
-              <button onClick={updateDeal} style={{ ...btn.primary, padding: '10px 28px' }}>保存</button>
-            </div>
+              </tbody>
+            </table>
           </div>
         </div>
       )}
-
-      {/* 案件削除確認 */}
-      {deletingDeal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <div style={{ background: '#fff', borderRadius: 12, padding: '36px 32px', maxWidth: 440, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.2)', textAlign: 'center' }}>
-            <div style={{ fontSize: 40, marginBottom: 16 }}>🗑</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: C.navy, marginBottom: 10 }}>案件を削除しますか？</div>
-            <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 28 }}>この操作は取り消せません。</div>
-            <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-              <button onClick={() => setDeletingDeal(null)} style={{ ...btn.secondary, padding: '10px 24px' }}>キャンセル</button>
-              <button onClick={() => deleteDeal(deletingDeal.id)} style={{ padding: '10px 28px', background: '#E53E3E', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>削除する</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 新規案件作成モーダル */}
-      {showModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowModal(false)}>
-          <div style={{ background: C.cream, borderRadius: 4, padding: '36px 40px', width: 520, maxWidth: '92vw', maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: C.navy, marginBottom: 24, paddingBottom: 16, borderBottom: '1px solid ' + C.border }}>新規案件を作成</div>
-            <CorporateNumberSearch compact onResult={(data) => setForm(fm => ({ ...fm, deal_name: fm.deal_name || data.name, corporate_number: data.number || '', seller_address: data.address || '' }))} />
-            {[
-              { label: '案件名', key: 'deal_name', placeholder: '例：株式会社〇〇 M&A案件', required: true },
-              { label: '業種', key: 'industry', placeholder: '例：製造業・IT・医療' },
-              { label: '戦略目的・背景', key: 'ma_strategy', placeholder: '例：後継者拡大・シナジー創出' },
-            ].map(f => (
-              <div key={f.key} style={{ marginBottom: 16 }}>
-                <label style={labelStyle}>{f.label}{f.required && ' *'}</label>
-                <input style={inp} placeholder={f.placeholder} value={form[f.key]} onChange={e => setForm(fm => ({ ...fm, [f.key]: e.target.value }))} />
-              </div>
-            ))}
-            <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>スキーム</label>
-              <select style={inp} value={form.scheme} onChange={e => setForm(fm => ({ ...fm, scheme: e.target.value }))}>
-                <option>株式譲渡</option><option>事業譲渡</option><option>合併</option><option>会社分割</option>
-              </select>
-            </div>
-            <div style={{ marginBottom: 28 }}>
-              <label style={labelStyle}>アドバイザーモード</label>
-              <select style={inp} value={form.advisor_mode} onChange={e => setForm(fm => ({ ...fm, advisor_mode: e.target.value }))}>
-                <option value="junior">新人モード（丁寧なサジェスト）</option>
-                <option value="senior">ベテランモード（要点・契約条件重視）</option>
-              </select>
-            </div>
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-              <button onClick={() => setShowModal(false)} style={{ ...btn.ghost, padding: '10px 22px' }}>キャンセル</button>
-              <button onClick={createDeal} style={{ ...btn.primary, padding: '10px 24px' }}>作成する</button>
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
-  )
+  );
 }
 
-// BPOボタン（App内共通）
-function BPOButton({ context }) {
-  const [sent, setSent] = useState(false)
-  const handleClick = async () => {
-    const API = import.meta.env.VITE_API_URL || 'https://synapsedeal-production.up.railway.app'
-    try {
-      await fetch(API + '/notify-slack', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: `🤝 *BPO相談リクエスト*\n> 場面：${context}\n> 日時：${new Date().toLocaleString('ja-JP')}` })
-      })
-      setSent(true)
-    } catch(e) { alert('送信エラー: ' + e.message) }
-  }
-  return (
-    <button onClick={handleClick} disabled={sent}
-      style={{ padding: '10px 24px', background: sent ? '#10b981' : '#C8A951', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
-      {sent ? '✅ 送信しました' : '💬 SYNAPSE DEALに相談する'}
-    </button>
-  )
-}
 
-// ==================== 共通Excelエクスポート ====================
-export function ExportExcelButton({ data, filename = 'synapsedeal_export', label = '📥 Excelエクスポート', sheets }) {
-  const handleExport = () => {
-    try {
-      const XLSX = window.XLSX || require('xlsx')
-      const wb = XLSX.utils.book_new()
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [deals, setDeals] = useState(INIT_DEALS);
+  const [users, setUsers] = useState(DEMO_USERS);
 
-      if (sheets && sheets.length > 0) {
-        // 複数シート
-        sheets.forEach(({ name, rows }) => {
-          if (!rows || rows.length === 0) return
-          const ws = XLSX.utils.json_to_sheet(rows)
-          // 列幅自動調整
-          const cols = Object.keys(rows[0] || {}).map(k => ({ wch: Math.max(k.length * 2, 12) }))
-          ws['!cols'] = cols
-          XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31))
-        })
-      } else if (data && data.length > 0) {
-        // 単一シート
-        const ws = XLSX.utils.json_to_sheet(data)
-        const cols = Object.keys(data[0] || {}).map(k => ({ wch: Math.max(k.length * 2, 12) }))
-        ws['!cols'] = cols
-        XLSX.utils.book_append_sheet(wb, ws, 'データ')
-      } else {
-        alert('エクスポートするデータがありません')
-        return
-      }
+  const handleLogin = (u) => {
+    if (!users.find(x => x.id === u.id)) setUsers(prev => [...prev, u]);
+    setUser(u);
+  };
 
-      const d = new Date()
-      const dateStr = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`
-      XLSX.writeFile(wb, `${filename}_${dateStr}.xlsx`)
-    } catch(e) {
-      // XLSXが読み込めない場合はCSVフォールバック
-      const rows = sheets ? sheets.flatMap(s => s.rows) : (data || [])
-      if (!rows.length) return
-      const headers = Object.keys(rows[0])
-      const csv = [headers.join(','), ...rows.map(r => headers.map(h => `"${String(r[h]||'').replace(/"/g,'""')}"`).join(','))].join('\n')
-      const blob = new Blob(['\uFEFF'+csv], { type: 'text/csv;charset=utf-8' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a'); a.href = url; a.download = filename + '.csv'; a.click()
-      URL.revokeObjectURL(url)
-    }
-  }
+  const addDeal = (d) => setDeals(prev => [...prev, d]);
+  const updateDeal = (d) => setDeals(prev => {
+    const exists = prev.find(x => x.id === d.id);
+    return exists ? prev.map(x => x.id === d.id ? d : x) : [...prev, d];
+  });
+  const bulkAdd = (newDeals) => setDeals(prev => {
+    const existingIds = new Set(prev.map(x => x.id));
+    const toAdd = newDeals.filter(d => !existingIds.has(d.id));
+    return [...prev, ...toAdd];
+  });
+
+  if (!user) return <AuthScreen onLogin={handleLogin} />;
+
+  if (user.role === "admin") return (
+    <AdminPortal user={user} deals={deals} users={users} onUpdateDeal={updateDeal} onBulkAdd={bulkAdd} onLogout={() => setUser(null)} />
+  );
 
   return (
-    <button onClick={handleExport}
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 18px', background: '#1e7e34', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
-      {label}
-    </button>
-  )
+    <IntermediaryPortal user={user} deals={deals} onAddDeal={addDeal} onUpdateDeal={updateDeal} onLogout={() => setUser(null)} />
+  );
 }
